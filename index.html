@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Google AI Studio App</title>
+  </head>
+  <body>
+    
+<script>
+  const originalError = console.error;
+  console.error = function(...args) {
+    originalError.apply(console, args);
+    fetch('/api/log-error', { 
+      method: 'POST', 
+      headers: {'Content-Type': 'application/json'}, 
+      body: JSON.stringify({ msg: 'CONSOLE_ERROR', args: args.map(a => String(a?.stack || a)) }) 
+    });
+  };
+</script>
+
+<script>window.onerror = function(msg, src, lineno, col, err){ fetch('/api/log-error', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ msg, src, lineno, col, err: err ? err.stack : null }) }); }; window.addEventListener('unhandledrejection', function(e){ fetch('/api/log-error', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ msg: e.reason ? e.reason.stack || e.reason.message || e.reason : 'Unhandled Rejection' }) }); });</script>
+<div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

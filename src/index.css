@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Hide the reCAPTCHA badge based on Google's guidelines (requires showing terms elsewhere) */
+.grecaptcha-badge {
+    visibility: hidden;
+}
+
+/* Premium custom scrollbar matching our neon/emerald dark theme */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(24, 24, 27, 0.4);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.35); /* Elegant emerald */
+  border-radius: 9999px;
+  border: 1px solid rgba(16, 185, 129, 0.15);
+  transition: background 0.3s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.6);
+}
+
+/* Firefox scrollbar support */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 185, 129, 0.35) rgba(24, 24, 27, 0.4);
+}
