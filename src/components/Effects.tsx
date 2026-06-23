@@ -93,19 +93,59 @@ function Laser({ start, end, color }: { start: [number, number, number], end: [n
   useFrame((_, delta) => {
     if (ref.current) {
       const mat = ref.current.material as THREE.MeshBasicMaterial;
-      mat.opacity = Math.max(0, mat.opacity - delta * 4);
+      mat.opacity = Math.max(0, mat.opacity - delta * 5);
+    }
+  });
+
+  const isPlayerWeapon = color === '#00ffff';
+
+  return (
+    <group>
+      <mesh 
+        ref={ref} 
+        position={position} 
+        rotation={rotation} 
+        scale={[0.18, 0.18, length]} 
+        geometry={sharedLaserGeometry}
+      >
+        <meshBasicMaterial color={color} toneMapped={false} transparent opacity={1} />
+      </mesh>
+      
+      {isPlayerWeapon && (
+        <ThermalVaporTrail position={position.clone()} rotation={rotation} length={length} />
+      )}
+    </group>
+  );
+}
+
+function ThermalVaporTrail({ position, rotation, length }: { position: THREE.Vector3, rotation: THREE.Euler, length: number }) {
+  const ref = useRef<THREE.Mesh>(null);
+  const driftY = useRef(0);
+  const currentScale = useRef([0.3, 0.3, length]);
+
+  useFrame((_, delta) => {
+    if (ref.current) {
+      driftY.current += delta * 1.6;
+      currentScale.current[0] += delta * 1.5;
+      currentScale.current[1] += delta * 1.5;
+      
+      ref.current.position.y = position.y + driftY.current;
+      ref.current.scale.set(currentScale.current[0], currentScale.current[1], length);
+      
+      const mat = ref.current.material as THREE.MeshBasicMaterial;
+      mat.opacity = Math.max(0, mat.opacity - delta * 2.5);
     }
   });
 
   return (
-    <mesh 
-      ref={ref} 
-      position={position} 
-      rotation={rotation} 
-      scale={[0.2, 0.2, length]} 
+    <mesh
+      ref={ref}
+      position={[position.x, position.y, position.z]}
+      rotation={rotation}
+      scale={currentScale.current as [number, number, number]}
       geometry={sharedLaserGeometry}
     >
-      <meshBasicMaterial color={color} toneMapped={false} transparent opacity={1} />
+      <meshBasicMaterial color="#f97316" toneMapped={false} transparent opacity={0.65} />
     </mesh>
   );
 }

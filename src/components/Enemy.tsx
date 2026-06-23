@@ -456,6 +456,9 @@ export function SentinelEnemy({ data }: { data: EnemyData }) {
       return;
     }
 
+    const isDashing = useGameStore.getState().isDashing;
+    const slowMultiplier = isDashing ? 0.25 : 1.0;
+
     const pos = body.current.translation();
     const currentPos = new THREE.Vector3(pos.x, pos.y, pos.z);
     
@@ -557,11 +560,11 @@ export function SentinelEnemy({ data }: { data: EnemyData }) {
     if (chargeState === 'charging') {
       // Dash in the fixed charge direction at 16.5m/s (massive momentum)
       body.current.setLinvel({
-        x: chargeDirection.current.x * 16.5,
+        x: chargeDirection.current.x * 16.5 * slowMultiplier,
         y: body.current.linvel().y,
-        z: chargeDirection.current.z * 16.5
+        z: chargeDirection.current.z * 16.5 * slowMultiplier
       }, true);
-      setSpeed(16.5);
+      setSpeed(16.5 * slowMultiplier);
 
       // Particle shadow stream
       if (Math.random() > 0.3) {
@@ -715,13 +718,13 @@ export function SentinelEnemy({ data }: { data: EnemyData }) {
     // Set relational rigid body velocity
     const velocity = body.current.linvel();
     body.current.setLinvel({
-      x: direction.x * ENEMY_SPEED * buffFactorSpeed,
+      x: direction.x * ENEMY_SPEED * buffFactorSpeed * slowMultiplier,
       y: velocity.y,
-      z: direction.z * ENEMY_SPEED * buffFactorSpeed
+      z: direction.z * ENEMY_SPEED * buffFactorSpeed * slowMultiplier
     }, true);
     
     const horizontalMove = direction.x * direction.x + direction.z * direction.z;
-    setSpeed(horizontalMove > 0.05 ? ENEMY_SPEED * buffFactorSpeed : 0);
+    setSpeed(horizontalMove > 0.05 ? ENEMY_SPEED * buffFactorSpeed * slowMultiplier : 0);
 
     // Dynamic rotation smoothly
     if (groupRef.current && direction.lengthSq() > 0.1) {
@@ -730,7 +733,7 @@ export function SentinelEnemy({ data }: { data: EnemyData }) {
       let diff = targetRotation - currentRotation;
       while (diff < -Math.PI) diff += Math.PI * 2;
       while (diff > Math.PI) diff -= Math.PI * 2;
-      groupRef.current.rotation.y += diff * 0.12;
+      groupRef.current.rotation.y += diff * 0.12 * slowMultiplier;
     }
   });
 

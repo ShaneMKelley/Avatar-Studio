@@ -867,6 +867,7 @@ export const Avatar: React.FC<AvatarProps> = ({
   const jumpActionRef = useRef<THREE.AnimationAction | null>(null);
   const dropActionRef = useRef<THREE.AnimationAction | null>(null);
   const danceActionRef = useRef<THREE.AnimationAction | null>(null);
+  const victoryActionRef = useRef<THREE.AnimationAction | null>(null);
   const signActionRef = useRef<THREE.AnimationAction | null>(null);
   const joggingActionRef = useRef<THREE.AnimationAction | null>(null);
   const runActionRef = useRef<THREE.AnimationAction | null>(null);
@@ -1131,6 +1132,54 @@ export const Avatar: React.FC<AvatarProps> = ({
           },
           undefined,
           (err: any) => console.warn("Gracefully bypassed dance animation load:", err?.message || err)
+        );
+
+        vrmaLoader.load(
+          "/animations/victorypose.vrma",
+          (vrmaGltf) => {
+            if (!isMounted || !mixerRef.current) return;
+            try {
+              const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
+              if (vrmAnimations && vrmAnimations.length > 0) {
+                const vrmAnimation = vrmAnimations[0] as VRMAnimation;
+                const clip = createVRMAnimationClip(vrmAnimation, loadedVrm as any);
+                victoryActionRef.current = mixerRef.current!.clipAction(clip);
+                victoryActionRef.current.loop = THREE.LoopOnce;
+                victoryActionRef.current.clampWhenFinished = true;
+                console.log("[Avatar] Successfully loaded VRMA victorypose animation!");
+              } else {
+                throw new Error("No vrmAnimations inside userData");
+              }
+            } catch (pErr) {
+              console.warn("Error parsing victorypose VRMA, falling back to cheer animation:", pErr);
+              if (cheerActionRef.current) {
+                victoryActionRef.current = cheerActionRef.current;
+              }
+            }
+          },
+          undefined,
+          (err: any) => {
+            console.warn("Gracefully falling back from victorypose loading error:", err?.message || err);
+            vrmaLoader.load(
+              "/animations/cheer.vrma",
+              (fallbackGltf) => {
+                if (!isMounted || !mixerRef.current) return;
+                try {
+                  const vrmAnimations = fallbackGltf.userData?.vrmAnimations;
+                  if (vrmAnimations && vrmAnimations.length > 0) {
+                    const vrmAnimation = vrmAnimations[0] as VRMAnimation;
+                    const clip = createVRMAnimationClip(vrmAnimation, loadedVrm as any);
+                    victoryActionRef.current = mixerRef.current!.clipAction(clip);
+                    victoryActionRef.current.loop = THREE.LoopOnce;
+                    victoryActionRef.current.clampWhenFinished = true;
+                    console.log("[Avatar] Successfully loaded fallback cheer animation for victory!");
+                  }
+                } catch {
+                  // silent
+                }
+              }
+            );
+          }
         );
 
         let loadedVRMAWalk = false;
@@ -1510,6 +1559,14 @@ export const Avatar: React.FC<AvatarProps> = ({
           danceActionRef.current.reset().fadeIn(0.2).play();
         } else {
           danceActionRef.current.fadeOut(0.2);
+        }
+      }
+
+      if (victoryActionRef.current) {
+        if (localUserGesture === "victory") {
+          victoryActionRef.current.reset().fadeIn(0.2).play();
+        } else {
+          victoryActionRef.current.fadeOut(0.2);
         }
       }
 

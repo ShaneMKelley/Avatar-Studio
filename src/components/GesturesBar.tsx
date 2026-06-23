@@ -1,5 +1,4 @@
-import React from 'react';
-import { Hand, PartyPopper, Music, Heart, Sparkles } from 'lucide-react';
+import { Hand, PartyPopper, Music, Heart, Sparkles, Trophy } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { triggerLocalGesture } from '../utils/gestures';
 
@@ -66,6 +65,17 @@ export const GesturesBar = () => {
       >
         <Sparkles className="w-3.5 h-3.5 md:w-4 md:h-4 animate-pulse text-amber-400" />
         Strut 💅
+      </button>
+      <button
+        onClick={() => handleGesture('victory')}
+        className={`flex items-center gap-1.5 md:gap-2 px-3 md:px-4 py-2 rounded-xl font-medium text-xs md:text-sm transition-colors whitespace-nowrap ${
+          localUserGesture === 'victory' 
+            ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.2)]' 
+            : 'bg-zinc-800/50 text-white hover:bg-zinc-700/50 border border-transparent'
+        }`}
+      >
+        <Trophy className="w-3.5 h-3.5 md:w-4 md:h-4 text-yellow-400" />
+        Victory 🏆
       </button>
     </div>
   );

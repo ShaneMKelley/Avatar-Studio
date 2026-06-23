@@ -36,6 +36,8 @@ export interface PlayerData {
   score: number;
   color: string;
   vrmUrl?: string;
+  lastShotTime?: number;
+  lastShotTarget?: [number, number, number];
 }
 
 export interface LaserData {
@@ -102,6 +104,20 @@ interface GameStore {
   // Tactical Dash Ability State
   dashCooldown: number; // in ms
   dashMaxCooldown: number; // in ms
+  isDashing: boolean;
+
+  // Combo Systems
+  comboCount: number;
+  comboMultiplier: number;
+  lastHitTimeMs: number;
+
+  // Tactical Ammo & Screen Freeze Systems
+  ammo: number;
+  maxAmmo: number;
+  isRechargingAmmo: boolean;
+  lastShootTimeMs: number;
+  recoilBloom: number;
+  hitStopActive: boolean;
   
   // Multiplayer
   socket: Socket | null;
@@ -246,6 +262,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   dashCooldown: 0,
   dashMaxCooldown: 3000,
+  isDashing: false,
+  comboCount: 0,
+  comboMultiplier: 1.0,
+  lastHitTimeMs: 0,
+  
+  // Tactical Ammo & Screen Freeze Systems initialization
+  ammo: 100,
+  maxAmmo: 100,
+  isRechargingAmmo: false,
+  lastShootTimeMs: 0,
+  recoilBloom: 0,
+  hitStopActive: false,
   
   socket: null,
   otherPlayers: {},
@@ -351,10 +379,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
 
       newSocket.on('playerShot', (data: { id: string, start: [number, number, number], end: [number, number, number], color: string }) => {
-        set(state => ({
-          lasers: [...state.lasers, { id: Math.random().toString(36).substr(2, 9), start: data.start, end: data.end, timestamp: Date.now(), color: data.color }],
-          particles: [...state.particles, { id: Math.random().toString(36).substr(2, 9), position: data.end, timestamp: Date.now(), color: data.color }]
-        }));
+        set(state => {
+          const nextOtherPlayers = { ...state.otherPlayers };
+          if (nextOtherPlayers[data.id]) {
+            nextOtherPlayers[data.id] = {
+              ...nextOtherPlayers[data.id],
+              lastShotTime: Date.now(),
+              lastShotTarget: data.end
+            };
+          }
+          return {
+            lasers: [...state.lasers, { id: Math.random().toString(36).substr(2, 9), start: data.start, end: data.end, timestamp: Date.now(), color: data.color }],
+            particles: [...state.particles, { id: Math.random().toString(36).substr(2, 9), position: data.end, timestamp: Date.now(), color: data.color }],
+            otherPlayers: nextOtherPlayers
+          };
+        });
       });
 
       newSocket.on('playerLeroyCharge', (data: { id: string }) => {
@@ -397,7 +436,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
           }
 
           if (isLocalShooter) {
-            newState.score = data.shooterScore;
+            const nextScore = data.shooterScore;
+            const previousScore = state.score;
+            if (previousScore < 1500 && nextScore >= 1500) {
+              soundManager.playScoreBig();
+              setTimeout(() => {
+                const rootStore = useStore.getState();
+                if (rootStore.localUserGesture !== 'victory') {
+                  rootStore.setLocalUserGesture('victory');
+                  syncService.broadcastChatMessage(`🏆 claims GLORIOUS VICTORY in the neon arena with ${nextScore} points! 🥇`);
+                  setTimeout(() => {
+                    if (useStore.getState().localUserGesture === 'victory') {
+                      useStore.getState().setLocalUserGesture(null);
+                    }
+                  }, 8000);
+                }
+              }, 100);
+            }
+            newState.score = nextScore;
           }
 
           // Update other players' states
@@ -459,7 +515,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       multiKillCount: 0,
       lastDefeatTime: 0,
       damageTexts: [],
-      dashCooldown: 0
+      dashCooldown: 0,
+      ammo: 100,
+      maxAmmo: 100,
+      isRechargingAmmo: false,
+      lastShootTimeMs: 0,
+      recoilBloom: 0,
+      hitStopActive: false
     });
   },
 
@@ -512,7 +574,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (state.gameState !== 'playing') return state;
     const newTime = state.timeLeft + delta;
     const newCooldown = Math.max(0, (state.dashCooldown || 0) - delta * 1000);
-    return { timeLeft: newTime, dashCooldown: newCooldown };
+    
+    // Recoil bloom decay: decrease dynamically over time
+    const newBloom = Math.max(0, (state.recoilBloom || 0) - delta * 3.5);
+    
+    // Handle ammo logic
+    let newAmmo = state.ammo !== undefined ? state.ammo : 100;
+    let newRechargingAmmo = state.isRechargingAmmo || false;
+    
+    if (newRechargingAmmo) {
+      // Rapid refill since we fully depleted: refills from 0 to 100 in 1.25s
+      newAmmo = Math.min(100, newAmmo + delta * 80);
+      if (newAmmo >= 100) {
+        newRechargingAmmo = false;
+      }
+    } else {
+      // Passive refill if player hasn't fired in the last 600ms
+      const now = Date.now();
+      const lastShoot = state.lastShootTimeMs || 0;
+      if (now - lastShoot > 600) {
+        newAmmo = Math.min(100, newAmmo + delta * 60);
+      }
+    }
+
+    return { 
+      timeLeft: newTime, 
+      dashCooldown: newCooldown,
+      recoilBloom: newBloom,
+      ammo: newAmmo,
+      isRechargingAmmo: newRechargingAmmo
+    };
   }),
 
   hitPlayer: (damage = 20) => set((state) => {
@@ -580,10 +671,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (state.gameState !== 'playing') return state;
     if (!byPlayer && id.startsWith('bot-')) return state;
     
+    if (byPlayer) {
+      setTimeout(() => {
+        set({ hitStopActive: false });
+      }, 50);
+    }
+
     // Check if it's a multiplayer player
     if (state.socket && state.otherPlayers[id]) {
       state.socket.emit('hitPlayer', id);
-      return state;
+      return { hitStopActive: byPlayer };
     }
 
     const targetEnemy = state.enemies.find(e => e.id === id);
@@ -595,7 +692,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const enemyTypeName = isInf ? 'Infiltrator' : isBomb ? 'Bombardier' : isOver ? 'Overseer' : isOp ? 'Drone Operator' : isDrone ? 'Support Drone' : 'Sentinel';
 
     let enemyDefeated = false;
-    let actualDamage = damage;
+    
+    // Calculate combo factors
+    let comboCount = state.comboCount !== undefined ? state.comboCount : 0;
+    let lastHitTimeMs = state.lastHitTimeMs !== undefined ? state.lastHitTimeMs : 0;
+    const now = Date.now();
+    
+    if (byPlayer) {
+      // If consecutive hit within 1.5 seconds, stack combo!
+      if (now - lastHitTimeMs < 1500) {
+        comboCount += 1;
+      } else {
+        comboCount = 1;
+      }
+      lastHitTimeMs = now;
+    }
+    
+    const comboMultiplier = 1.0 + Math.min(1.0, (comboCount - 1) * 0.1); // max 2.0x modifier (at 11 hits)
+    let actualDamage = damage * comboMultiplier;
+    
     const isWeakpointHit = isBomb && damageTypeMsg === 'ROCKET POD WEAKPOINT';
     const isOverWeakpointHit = isOver && damageTypeMsg === 'MULTI-LENSED HELMET';
 
@@ -841,7 +956,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       ...(state.damageTexts || []),
       {
         id: Math.random().toString(),
-        text: actualDamage.toFixed(1),
+        text: comboCount > 1 ? `${actualDamage.toFixed(1)} (x${comboCount})` : actualDamage.toFixed(1),
         position: targetEnemy.position,
         timestamp: Date.now(),
         color: showColor,
@@ -849,16 +964,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
     ].slice(-39) : (state.damageTexts || []);
 
+    const nextScore = byPlayer ? state.score + extraScore : state.score;
+    const previousScore = state.score;
+    const justWonScore = previousScore < 1500 && nextScore >= 1500;
+    const justWonBoss = enemyDefeated && isOver;
+
+    if (byPlayer && (justWonScore || justWonBoss)) {
+      soundManager.playScoreBig();
+      
+      const winReason = justWonBoss 
+        ? `by defeating the mighty Overseer Boss!`
+        : `with a breathtaking score of ${nextScore} points!`;
+
+      // Log victory to match logs
+      extraMatchLogs.push({
+        id: Math.random().toString(),
+        type: 'streak',
+        message: `🏆 MATCH VICTORY! You won the Arena match ${winReason}`,
+        timestamp: Date.now()
+      });
+
+      setTimeout(() => {
+        const rootStore = useStore.getState();
+        if (rootStore.localUserGesture !== 'victory') {
+          rootStore.setLocalUserGesture('victory');
+          syncService.broadcastChatMessage(`🏆 claims GLORIOUS VICTORY in the neon arena ${winReason} 🥇`);
+          setTimeout(() => {
+            if (useStore.getState().localUserGesture === 'victory') {
+              useStore.getState().setLocalUserGesture(null);
+            }
+          }, 8000);
+        }
+      }, 100);
+    }
+
     return {
       enemies,
-      score: byPlayer ? state.score + extraScore : state.score,
+      score: nextScore,
       events: compiledEvents,
       matchLogs: extraMatchLogs.slice(-24),
       firstBloodTriggered: nextFirstBlood,
       survivorStreak: nextSurvivorStreak,
       multiKillCount: nextMultiKillCount,
       lastDefeatTime: nextLastDefeatTime,
-      damageTexts: newDamageTextList
+      damageTexts: newDamageTextList,
+      hitStopActive: byPlayer,
+      comboCount,
+      comboMultiplier,
+      lastHitTimeMs
     };
   }),
 

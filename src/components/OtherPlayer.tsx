@@ -38,8 +38,19 @@ export function OtherPlayer({ id }: { id: string }) {
 
     // Smoothly interpolate rotation
     if (groupRef.current) {
+      const isShootingRecent = data.lastShotTime && (Date.now() - data.lastShotTime < 1000);
+      let targetRotationY = data.rotation;
+
+      if (isShootingRecent && data.lastShotTarget) {
+        const dx = data.lastShotTarget[0] - data.position[0];
+        const dz = data.lastShotTarget[2] - data.position[2];
+        if (dx * dx + dz * dz > 0.01) {
+          targetRotationY = Math.atan2(dx, dz);
+        }
+      }
+
       // Handle angle wrap-around
-      let diff = data.rotation - groupRef.current.rotation.y;
+      let diff = targetRotationY - groupRef.current.rotation.y;
       while (diff < -Math.PI) diff += Math.PI * 2;
       while (diff > Math.PI) diff -= Math.PI * 2;
       groupRef.current.rotation.y += diff * lerpFactor;
@@ -59,7 +70,14 @@ export function OtherPlayer({ id }: { id: string }) {
     >
       <CapsuleCollider args={[0.5, 0.5]} position={[0, 1, 0]} />
       <group ref={groupRef} position={[0, 0, 0]}>
-        <ArenaAvatar url={data.vrmUrl} disabled={data.state === 'disabled'} speedRef={speedRef} />
+        <ArenaAvatar 
+          url={data.vrmUrl} 
+          disabled={data.state === 'disabled'} 
+          speedRef={speedRef} 
+          lastShotTime={data.lastShotTime}
+          lastShotTarget={data.lastShotTarget}
+          playerPosition={data.position}
+        />
         
         {/* Username Label */}
         <Text

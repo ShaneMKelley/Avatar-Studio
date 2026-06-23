@@ -654,6 +654,55 @@ class CyberSoundManager {
     }
   }
 
+  playHeartbeat() {
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      
+      // First beat (lub) - rapid bass thump
+      const osc1 = this.ctx.createOscillator();
+      const gain1 = this.ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(65, now);
+      osc1.frequency.linearRampToValueAtTime(30, now + 0.12);
+      gain1.gain.setValueAtTime(0.35, now);
+      gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+      
+      const filter1 = this.ctx.createBiquadFilter();
+      filter1.type = 'lowpass';
+      filter1.frequency.setValueAtTime(100, now);
+      
+      osc1.connect(filter1);
+      filter1.connect(gain1);
+      gain1.connect(this.ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.13);
+      
+      // Second beat (dub) - slightly lower pitch & offset by 220ms
+      const delay = 0.22;
+      const osc2 = this.ctx.createOscillator();
+      const gain2 = this.ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(55, now + delay);
+      osc2.frequency.linearRampToValueAtTime(25, now + delay + 0.12);
+      gain2.gain.setValueAtTime(0.28, now + delay);
+      gain2.gain.exponentialRampToValueAtTime(0.01, now + delay + 0.12);
+      
+      const filter2 = this.ctx.createBiquadFilter();
+      filter2.type = 'lowpass';
+      filter2.frequency.setValueAtTime(80, now + delay);
+      
+      osc2.connect(filter2);
+      filter2.connect(gain2);
+      gain2.connect(this.ctx.destination);
+      osc2.start(now + delay);
+      osc2.stop(now + delay + 0.13);
+    } catch (e) {
+      console.warn("Heartbeat playback failed", e);
+    }
+  }
+
   stopLyriaJungleStream() {
     try {
       if (!this.jungleStreamNodes) return;

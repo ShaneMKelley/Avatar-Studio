@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { DEFAULT_VRM_URL } from '../store/useStore';
 import { convertVRMMaterialsForWebGPU, isWebGPURendererActive } from '../utils/renderer';
 
-export function ArenaAvatar({ url, disabled = false, speedRef }: { url?: string, disabled?: boolean, speedRef?: React.MutableRefObject<number> }) {
+export function ArenaAvatar({ url, disabled = false, speedRef, lastShotTime, lastShotTarget, playerPosition }: { url?: string, disabled?: boolean, speedRef?: React.MutableRefObject<number>, lastShotTime?: number, lastShotTarget?: [number, number, number], playerPosition?: [number, number, number] }) {
   const [vrm, setVrm] = useState<VRM | null>(null);
   const [glbScene, setGlbScene] = useState<THREE.Group | null>(null);
   const vrmRef = useRef<VRM | null>(null);
@@ -130,6 +130,18 @@ export function ArenaAvatar({ url, disabled = false, speedRef }: { url?: string,
     
     const speed = speedRef ? speedRef.current : 0;
 
+    const isShootingRecent = lastShotTime && (Date.now() - lastShotTime < 1000);
+    let shootingPitch = 0;
+    if (isShootingRecent && lastShotTarget && playerPosition) {
+      const dx = lastShotTarget[0] - playerPosition[0];
+      const dy = lastShotTarget[1] - (playerPosition[1] + 1.25);
+      const dz = lastShotTarget[2] - playerPosition[2];
+      const dist2D = Math.sqrt(dx * dx + dz * dz);
+      if (dist2D > 0.1) {
+        shootingPitch = Math.atan2(dy, dist2D);
+      }
+    }
+
     // Handle VRM procedural animation
     if (vrmRef.current) {
       const v = vrmRef.current;
@@ -159,6 +171,8 @@ export function ArenaAvatar({ url, disabled = false, speedRef }: { url?: string,
           const rightKnee = v.humanoid.getNormalizedBoneNode('rightLowerLeg');
           const leftArm = v.humanoid.getNormalizedBoneNode('leftUpperArm');
           const rightArm = v.humanoid.getNormalizedBoneNode('rightUpperArm');
+          const rightLowerArm = v.humanoid.getNormalizedBoneNode('rightLowerArm');
+          const head = v.humanoid.getNormalizedBoneNode('head');
 
           if (leftLeg && rightLeg && leftKnee && rightKnee && leftArm && rightArm) {
             leftLeg.rotation.x = Math.sin(t * walkFactor) * walkIntensity;
@@ -167,17 +181,43 @@ export function ArenaAvatar({ url, disabled = false, speedRef }: { url?: string,
             if (isRunning) {
               leftKnee.rotation.x = Math.max(0, -Math.sin(t * walkFactor) * walkIntensity * 2);
               rightKnee.rotation.x = Math.max(0, Math.sin(t * walkFactor) * walkIntensity * 2);
-              leftArm.rotation.x = -Math.sin(t * walkFactor) * walkIntensity;
-              rightArm.rotation.x = Math.sin(t * walkFactor) * walkIntensity;
-              leftArm.rotation.z = 1.2;
-              rightArm.rotation.z = -1.2;
             } else {
               leftKnee.rotation.x = 0;
               rightKnee.rotation.x = 0;
-              leftArm.rotation.z = 1.2;
-              rightArm.rotation.z = -1.2;
-              leftArm.rotation.x = 0;
-              rightArm.rotation.x = 0;
+            }
+
+            if (isShootingRecent) {
+              // Right Arm points forward adjusted by target pitch
+              rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, -1.4 - shootingPitch, 15 * delta);
+              rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, -0.15, 15 * delta);
+              rightArm.rotation.y = THREE.MathUtils.lerp(rightArm.rotation.y, 0.0, 15 * delta);
+              
+              if (rightLowerArm) {
+                rightLowerArm.rotation.x = THREE.MathUtils.lerp(rightLowerArm.rotation.x, -0.15, 15 * delta);
+              }
+
+              // Left Arm in tactical gun bracing/supporting pose
+              leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, -0.6, 12 * delta);
+              leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, 0.4, 12 * delta);
+              leftArm.rotation.y = THREE.MathUtils.lerp(leftArm.rotation.y, 0.0, 12 * delta);
+
+              if (head) {
+                head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, -shootingPitch, 15 * delta);
+              }
+            } else {
+              if (isRunning) {
+                leftArm.rotation.x = -Math.sin(t * walkFactor) * walkIntensity;
+                rightArm.rotation.x = Math.sin(t * walkFactor) * walkIntensity;
+                leftArm.rotation.z = 1.2;
+                rightArm.rotation.z = -1.2;
+              } else {
+                leftArm.rotation.z = 1.2;
+                rightArm.rotation.z = -1.2;
+                leftArm.rotation.x = 0;
+                rightArm.rotation.x = 0;
+              }
+              if (rightLowerArm) rightLowerArm.rotation.x = 0;
+              if (head) head.rotation.x = 0;
             }
           }
         }

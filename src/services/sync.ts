@@ -483,8 +483,8 @@ class SyncService {
   }
 
   public changeRoom(roomId: string) {
-    if (!this.socket) return;
     useStore.getState().setCurrentRoom(roomId);
+    if (!this.socket) return;
     
     // Disconnect all current peer connections since we only want to talk to people in the new room
     for (const [id, conn] of this.connections.entries()) {

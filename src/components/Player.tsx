@@ -172,10 +172,30 @@ export function Player() {
   const shoot = () => {
     if (gameState !== 'playing' || playerState !== 'active') return;
     
+    // Check Ammo and Recharging state
+    const storeState = useGameStore.getState();
+    if (storeState.isRechargingAmmo || (storeState.ammo !== undefined && storeState.ammo < 10)) {
+      if (!storeState.isRechargingAmmo) {
+        useGameStore.setState({ isRechargingAmmo: true });
+      }
+      return;
+    }
+    
     // Rate limit shooting
     const now = Date.now();
     if (now - lastShootTime.current < 200) return;
     lastShootTime.current = now;
+
+    // Drain ammo and increment weapon bloom
+    const nextAmmo = Math.max(0, (storeState.ammo !== undefined ? storeState.ammo : 100) - 10);
+    const nextRecharging = nextAmmo <= 0;
+    
+    useGameStore.setState(state => ({
+      ammo: nextAmmo,
+      isRechargingAmmo: nextRecharging,
+      lastShootTimeMs: Date.now(),
+      recoilBloom: Math.min(1.0, (state.recoilBloom || 0) + 0.25)
+    }));
 
     // Raycast from camera
     const raycaster = new THREE.Raycaster();
@@ -325,6 +345,11 @@ export function Player() {
       const dashVel = dashDirection.current.clone().multiplyScalar(dashSpeed);
       body.current.setLinvel({ x: dashVel.x, y: velocity.y, z: dashVel.z }, true);
 
+      // Synced dash state
+      if (!useGameStore.getState().isDashing) {
+        useGameStore.setState({ isDashing: true });
+      }
+
       // Spawn trail particles behind player
       const playerPosVec = body.current.translation();
       const storeState = useGameStore.getState();
@@ -336,6 +361,8 @@ export function Player() {
         playerPosVec.z + (Math.random() - 0.5) * 1.5
       ], chosenColor);
       return;
+    } else if (useGameStore.getState().isDashing) {
+      useGameStore.setState({ isDashing: false });
     }
     
     const k = keys.current;

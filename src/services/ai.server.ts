@@ -27,10 +27,9 @@ export async function getGenAIClient(): Promise<GoogleGenAI> {
     }
   }
 
-  // Fallback to provided administrator key if we still don't have a valid key
-  if (!activeKey || activeKey === "DUMMY_KEY_FALLBACK" || activeKey === "MY_GEMINI_API_KEY" || activeKey === "") {
-    activeKey = "AIzaSyDHD-YUAjNFjfhquGIHqg7YlWox8f-BSR4";
-    process.env.GEMINI_API_KEY = activeKey;
+  // Enforce usage of environment variables or dynamic synchronization; fail early with a clear message if no key is found
+  if (!activeKey || activeKey === "DUMMY_KEY_FALLBACK" || activeKey === "MY_GEMINI_API_KEY") {
+    throw new Error("GEMINI_API_KEY environment variable is required but is missing or set to a placeholder. Please configure it in your environment or .env file.");
   }
 
   if (!aiInstance || currentKeyUsed !== activeKey) {

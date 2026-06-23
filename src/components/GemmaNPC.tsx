@@ -40,7 +40,7 @@ interface AIInstruction {
   duration?: number; // For idle
   meta?: any;
   gait?: "walk" | "run" | "sneak" | "strut" | "jump";
-  hands?: "relaxed" | "hips" | "explaining" | "hug" | "dance" | "wave" | "cheer" | "happyidle";
+  hands?: "relaxed" | "hips" | "explaining" | "hug" | "dance" | "wave" | "cheer" | "happyidle" | "victory" | "victorypose";
   expression?: VRMExpressionPresetName;
 }
 
@@ -52,6 +52,7 @@ const WALK_SPEED = 1.15;
 const _tempVec1 = new THREE.Vector3();
 const _tempVec2 = new THREE.Vector3();
 const _tempVec3 = new THREE.Vector3();
+const _tempVec4 = new THREE.Vector3();
 const _avoidanceForce = new THREE.Vector3();
 const _desiredVelocity = new THREE.Vector3();
 const _repulseDir = new THREE.Vector3();
@@ -766,6 +767,15 @@ export const GemmaNPC: React.FC = () => {
   const jumpActionRef = useRef<THREE.AnimationAction | null>(null);
   const danceActionRef = useRef<THREE.AnimationAction | null>(null);
   const happyIdleActionRef = useRef<THREE.AnimationAction | null>(null);
+  const victoryActionRef = useRef<THREE.AnimationAction | null>(null);
+
+  const lastTargetedEnemyPosRef = useRef<THREE.Vector3 | null>(null);
+
+  // Arena waypoint follow system state & refs
+  const [arenaWaypoints, setArenaWaypoints] = useState<THREE.Vector3[]>([]);
+  const arenaWaypointsRef = useRef<THREE.Vector3[]>([]);
+  const floorMarkerRingRef = useRef<THREE.Mesh>(null);
+  const floorMarkerCoreRef = useRef<THREE.Mesh>(null);
 
   // Remote Sync State
   const targetBones = useRef<Record<string, THREE.Quaternion>>({});
@@ -811,6 +821,7 @@ export const GemmaNPC: React.FC = () => {
     const isWaving = currentInstruction.hands === "wave" || (waveActionRef.current && waveActionRef.current.isRunning());
     const isCheering = currentInstruction.hands === "cheer" || (cheerActionRef.current && cheerActionRef.current.isRunning());
     const isHugging = currentInstruction.hands === "hug" || (hugActionRef.current && hugActionRef.current.isRunning());
+    const isVictory = currentInstruction.hands === "victory" || currentInstruction.hands === "victorypose" || (victoryActionRef.current && victoryActionRef.current.isRunning());
 
     if (waveActionRef.current) {
       if (currentInstruction.hands === "wave" && !isSigning) {
@@ -840,13 +851,20 @@ export const GemmaNPC: React.FC = () => {
         danceActionRef.current.fadeOut(0.2);
       }
     }
+    if (victoryActionRef.current) {
+      if ((currentInstruction.hands === "victory" || currentInstruction.hands === "victorypose") && !isSigning) {
+        victoryActionRef.current.reset().fadeIn(0.2).play();
+      } else {
+        victoryActionRef.current.fadeOut(0.2);
+      }
+    }
     if (happyIdleActionRef.current) {
       // Trigger spontaneously if instructed, or when happy and standing idle (and not doing any other gestures)
       const triggerHappyIdle =
         currentInstruction.hands === "happyidle" ||
         (currentInstruction.expression === VRMExpressionPresetName.Happy &&
          currentInstruction.action === "idle" &&
-         !isSigning && !isDancing && !isWaving && !isCheering && !isHugging);
+         !isSigning && !isDancing && !isWaving && !isCheering && !isHugging && !isVictory);
 
       if (triggerHappyIdle) {
         if (!happyIdleActionRef.current.isRunning()) {
@@ -1222,9 +1240,25 @@ export const GemmaNPC: React.FC = () => {
         );
 
         // Face the user and react physically
-        let reactionHands: "relaxed" | "hips" | "explaining" | "hug" | "dance" | "wave" | "cheer" = "hips";
+        let reactionHands: "relaxed" | "hips" | "explaining" | "hug" | "dance" | "wave" | "cheer" | "victory" = "hips";
         let reactionExpression: VRMExpressionPresetName =
           VRMExpressionPresetName.Surprised;
+
+        if (localUserGesture === "victory") {
+          setCurrentInstruction({
+            action: "interact",
+            lookAt: { x: userPos.x, y: userPos.y, z: userPos.z },
+            duration: 6000,
+            hands: "victory",
+            expression: VRMExpressionPresetName.Happy,
+          });
+          handleGemmaInteraction(
+            `🏆 UNBELIEVABLE VICTORY, ${localUserName}! Let's celebrate your epic triumph! You totally dominated the neon arena! *poses triumphantly with you* 🎉`,
+            true,
+            VRMExpressionPresetName.Happy,
+          );
+          return;
+        }
 
         if (localUserGesture === "wave") {
           reactionHands = "explaining";
@@ -1724,6 +1758,54 @@ export const GemmaNPC: React.FC = () => {
           (err: any) => console.warn("Gracefully bypassed dance animation load for GemmaNPC:", err?.message || err)
         );
 
+        vrmaLoader.load(
+          "/animations/victorypose.vrma",
+          (vrmaGltf) => {
+            if (!mixerRef.current) return;
+            try {
+              const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
+              if (vrmAnimations && vrmAnimations.length > 0) {
+                const vrmAnimation = vrmAnimations[0] as VRMAnimation;
+                const clip = createVRMAnimationClip(vrmAnimation, vrmData as any);
+                victoryActionRef.current = mixerRef.current!.clipAction(clip);
+                victoryActionRef.current.loop = THREE.LoopOnce;
+                victoryActionRef.current.clampWhenFinished = true;
+                console.log("[GemmaNPC] Successfully loaded VRMA victorypose animation!");
+              } else {
+                throw new Error("No vrmAnimations inside userData");
+              }
+            } catch (pErr) {
+              console.warn("Error parsing victorypose VRMA for GemmaNPC, falling back to cheer animation:", pErr);
+              if (cheerActionRef.current) {
+                victoryActionRef.current = cheerActionRef.current;
+              }
+            }
+          },
+          undefined,
+          (err: any) => {
+            console.warn("Gracefully falling back from victorypose loading error for GemmaNPC:", err?.message || err);
+            vrmaLoader.load(
+              "/animations/cheer.vrma",
+              (fallbackGltf) => {
+                if (!mixerRef.current) return;
+                try {
+                  const vrmAnimations = fallbackGltf.userData?.vrmAnimations;
+                  if (vrmAnimations && vrmAnimations.length > 0) {
+                    const vrmAnimation = vrmAnimations[0] as VRMAnimation;
+                    const clip = createVRMAnimationClip(vrmAnimation, vrmData as any);
+                    victoryActionRef.current = mixerRef.current!.clipAction(clip);
+                    victoryActionRef.current.loop = THREE.LoopOnce;
+                    victoryActionRef.current.clampWhenFinished = true;
+                    console.log("[GemmaNPC] Successfully loaded fallback cheer animation for victory!");
+                  }
+                } catch {
+                  // silent
+                }
+              }
+            );
+          }
+        );
+
         let loadedVRMAWalk = false;
         const walkVrmaLoader = new GLTFLoader();
         walkVrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
@@ -1889,6 +1971,25 @@ export const GemmaNPC: React.FC = () => {
 
       let newInstruction: AIInstruction;
 
+      if (latestCurrentRoom === 'arena') {
+        newInstruction = {
+          action: "move",
+          target: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
+          gait: "run",
+          hands: "relaxed",
+          expression: VRMExpressionPresetName.Relaxed,
+          meta: {
+            reason: "Arena Combat Assistant Active",
+          },
+        };
+        console.log(
+          "🧠 Gemma Brain Instruction:",
+          JSON.stringify(newInstruction),
+        );
+        setCurrentInstruction(newInstruction);
+        return;
+      }
+
       // Special partner companion prioritized behaviors if player is alone (isSolo)
       if (latestIsSolo) {
         if (minUserDist > 5.5) {
@@ -1905,8 +2006,8 @@ export const GemmaNPC: React.FC = () => {
           };
         } else if (minUserDist > 2.2) {
           // Walk closer to standard conversation proximity (keeping polite social distance of ~1.3 meters)
-          const dirX = npcPosition.x - nearestUserPos.x;
-          const dirZ = npcPosition.z - nearestUserPos.z;
+          const dirX = currentPosVec.x - nearestUserPos.x;
+          const dirZ = currentPosVec.z - nearestUserPos.z;
           const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
           let targetX = nearestUserPos.x;
           let targetZ = nearestUserPos.z;
@@ -1914,8 +2015,8 @@ export const GemmaNPC: React.FC = () => {
             targetX = nearestUserPos.x + (dirX / len) * 1.3;
             targetZ = nearestUserPos.z + (dirZ / len) * 1.3;
           } else {
-            targetX = nearestUserPos.x + (Math.random() - 0.5) * 1.2;
-            targetZ = nearestUserPos.z + (Math.random() - 0.5) * 1.2;
+            targetX = currentPosVec.x + (Math.random() - 0.5) * 1.2;
+            targetZ = currentPosVec.z + (Math.random() - 0.5) * 1.2;
           }
 
           newInstruction = {
@@ -2035,8 +2136,8 @@ export const GemmaNPC: React.FC = () => {
       // Priority 2.5: Approaching to host user (social behavior)
       else if (minUserDist < 8.0 && Math.random() > 0.3) {
         // Calculate dynamic offset position so she stops at a polite social distance (~1.3 meters)
-        const dirX = npcPosition.x - nearestUserPos.x;
-        const dirZ = npcPosition.z - nearestUserPos.z;
+        const dirX = currentPosVec.x - nearestUserPos.x;
+        const dirZ = currentPosVec.z - nearestUserPos.z;
         const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
         let targetX = nearestUserPos.x;
         let targetZ = nearestUserPos.z;
@@ -2117,9 +2218,11 @@ export const GemmaNPC: React.FC = () => {
     // Initial thought
     if (!currentInstruction) think();
 
-    // If moving, we wait until we arrive (handled in useFrame).
-    // If idle/interacting, we set a timeout to rethink.
-    if (
+    // If moving, we periodically rethink (e.g., every 1.5s) to follow moving players dynamically
+    if (currentInstruction.action === "move") {
+      const timeout = setTimeout(think, 1500);
+      return () => clearTimeout(timeout);
+    } else if (
       currentInstruction.action === "idle" ||
       currentInstruction.action === "interact"
     ) {
@@ -2151,6 +2254,7 @@ export const GemmaNPC: React.FC = () => {
     const currentPos = rigidBodyRef.current.translation();
     const posVec = _tempVec1.set(currentPos.x, currentPos.y, currentPos.z);
     const t = state.clock.elapsedTime;
+    const time = t;
 
     // Find closest user for lookAt and optimization
     const userPos = _tempVec2.set(...localUserPosition);
@@ -2755,61 +2859,70 @@ export const GemmaNPC: React.FC = () => {
       
       // If we are in solo companion mode in the Arena, scan and fire at nearest active enemy!
       if (isHost && isSolo && currentRoom === 'arena') {
-        const activeEnemies = useGameStore.getState().enemies?.filter(e => e.state === 'active') || [];
-        if (activeEnemies.length > 0) {
-          let closestEnemy = activeEnemies[0];
-          let closestDist = Infinity;
-          activeEnemies.forEach(e => {
-            const ePosVec = new THREE.Vector3(e.position[0], e.position[1], e.position[2]);
-            const d = posVec.distanceTo(ePosVec);
-            if (d < closestDist) {
-              closestDist = d;
-              closestEnemy = e;
-            }
-          });
+        const pPos = useGameStore.getState().playerPosition;
+        const playerInSafeZone = pPos ? (Math.sqrt(pPos[0] * pPos[0] + pPos[2] * pPos[2]) < 10.5) : false;
+        const gemmaInSafeZone = Math.sqrt(currentPos.x * currentPos.x + currentPos.z * currentPos.z) < 10.5;
 
-          // Focus lookAt target on the enemy
-          targetedEnemyPos = new THREE.Vector3(closestEnemy.position[0], closestEnemy.position[1], closestEnemy.position[2]);
+        if (!playerInSafeZone && !gemmaInSafeZone) {
+          const activeEnemies = useGameStore.getState().enemies?.filter(e => e.state === 'active') || [];
+          if (activeEnemies.length > 0) {
+            let closestEnemy = activeEnemies[0];
+            let closestDist = Infinity;
+            activeEnemies.forEach(e => {
+              const ePosVec = new THREE.Vector3(e.position[0], e.position[1], e.position[2]);
+              const d = posVec.distanceTo(ePosVec);
+              if (d < closestDist) {
+                closestDist = d;
+                closestEnemy = e;
+              }
+            });
 
-          // Shoot every 1.8 seconds
-          if (t > lastShotTimeRef.current + 1.8) {
-            lastShotTimeRef.current = t;
+            // Focus lookAt target on the enemy
+            targetedEnemyPos = new THREE.Vector3(closestEnemy.position[0], closestEnemy.position[1], closestEnemy.position[2]);
 
-            const gemmaPosArray: [number, number, number] = [currentPos.x, currentPos.y + 1.2, currentPos.z];
-            const enemyPosArray: [number, number, number] = [closestEnemy.position[0], closestEnemy.position[1], closestEnemy.position[2]];
+            // Shoot every 1.8 seconds
+            if (t > lastShotTimeRef.current + 1.8) {
+              lastShotTimeRef.current = t;
 
-            // Draw laser effect
-            useGameStore.getState().addLaser(gemmaPosArray, enemyPosArray, '#ec4899'); // Neon Pink for Gemma!
+              const gemmaPosArray: [number, number, number] = [currentPos.x, currentPos.y + 1.2, currentPos.z];
+              const enemyPosArray: [number, number, number] = [closestEnemy.position[0], closestEnemy.position[1], closestEnemy.position[2]];
 
-            // Deal combat damage
-            useGameStore.getState().hitEnemy(closestEnemy.id, true, 1.5, "Gemma Laser Strike!");
+              // Draw laser effect
+              useGameStore.getState().addLaser(gemmaPosArray, enemyPosArray, '#ec4899'); // Neon Pink for Gemma!
 
-            // Play laser gunshot sound
-            soundManager.playLaser();
+              // Deal combat damage
+              useGameStore.getState().hitEnemy(closestEnemy.id, true, 1.5, "Gemma Laser Strike!");
 
-            // Fire expression
-            if (vrm.expressionManager) {
-              vrm.expressionManager.setValue(VRMExpressionPresetName.Surprised, 1.0);
-              setTimeout(() => {
-                vrm.expressionManager?.setValue(VRMExpressionPresetName.Surprised, 0.0);
-              }, 400);
-            }
+              // Play laser gunshot sound
+              soundManager.playLaser();
 
-            // Occasional combat buddy audio commentaries
-            if (Math.random() < 0.25) {
-              const buddyQuotes = [
-                "Target locked! Firing plasma pulses!",
-                "Don't worry, partner, I've got your flank!",
-                "Direct hit! Down they go!",
-                "Sentinel disabled! Keep pushing, architect!",
-                "Fending off attackers! Firing laser defense arrays!"
-              ];
-              const quote = buddyQuotes[Math.floor(Math.random() * buddyQuotes.length)];
-              handleGemmaInteraction(quote, true, VRMExpressionPresetName.Surprised);
+              // Fire expression
+              if (vrm.expressionManager) {
+                vrm.expressionManager.setValue(VRMExpressionPresetName.Surprised, 1.0);
+                setTimeout(() => {
+                  vrm.expressionManager?.setValue(VRMExpressionPresetName.Surprised, 0.0);
+                }, 400);
+              }
+
+              // Occasional combat buddy audio commentaries (Reduced frequency to talk less!)
+              if (Math.random() < 0.05) {
+                const buddyQuotes = [
+                  "Target locked! Firing plasma pulses!",
+                  "Don't worry, partner, I've got your flank!",
+                  "Direct hit! Down they go!",
+                  "Sentinel disabled! Keep pushing, architect!",
+                  "Fending off attackers! Firing laser defense arrays!"
+                ];
+                const quote = buddyQuotes[Math.floor(Math.random() * buddyQuotes.length)];
+                handleGemmaInteraction(quote, true, VRMExpressionPresetName.Surprised);
+              }
             }
           }
         }
       }
+
+      // Record any active target in components refs for body tracking
+      lastTargetedEnemyPosRef.current = targetedEnemyPos;
 
       // Target is closest user pos + saccade offset (or targeted enemy if shooting)
       const targetPoint = targetedEnemyPos 
@@ -2905,28 +3018,96 @@ export const GemmaNPC: React.FC = () => {
       }
     }
 
-    if (currentInstruction.action === "move" && currentInstruction.target) {
-      const target = _tempVec3.set(
-        currentInstruction.target.x,
-        0,
-        currentInstruction.target.z,
-      );
-      const dist = posVec.distanceTo(target);
+    const tempTarget = _tempVec3;
+    let targetActive = false;
+    let stopDist = 0.2;
 
-      // Stop slightly earlier if it's a summon (don't collide with player)
-      let stopDist = 0.2;
-      if (currentInstruction.meta?.reason === "Summoned by mention")
-        stopDist = 1.5;
-      if (currentInstruction.meta?.reason === "Going to hug user")
-        stopDist = 0.38; // Closer stopping distance so they stand near each other for contact
-      if (currentInstruction.meta?.reason === "Approaching to host user")
-        stopDist = 1.8; // Stand at a friendly social distance when approaching to host someone
+    if (currentRoom === 'arena') {
+      // --- Waypoint Follower in Arena ---
+      const playerPos = localUserPosition ? _tempVec4.set(...localUserPosition) : null;
+      if (playerPos) {
+        // Initialize or update waypoints queue
+        const currentWps = arenaWaypointsRef.current;
+        if (currentWps.length === 0) {
+          if (posVec.distanceTo(playerPos) > 3.0) {
+            currentWps.push(playerPos.clone());
+            setArenaWaypoints([...currentWps]);
+          }
+        } else {
+          const lastWp = currentWps[currentWps.length - 1];
+          if (playerPos.distanceTo(lastWp) > 2.2) {
+            // Player moved far enough, record new waypoint
+            currentWps.push(playerPos.clone());
+            if (currentWps.length > 15) {
+              currentWps.shift(); // Keep size readable
+            }
+            setArenaWaypoints([...currentWps]);
+          }
+        }
+      }
+
+      // De-queue waypoints as Gemma reaches them
+      const currentWps = arenaWaypointsRef.current;
+      if (currentWps.length > 0) {
+        let nextWp = currentWps[0];
+        // Dist to first waypoint
+        const distToWp = posVec.distanceTo(nextWp);
+        if (distToWp < 1.3) {
+          currentWps.shift();
+          setArenaWaypoints([...currentWps]);
+          if (currentWps.length > 0) {
+            nextWp = currentWps[0];
+          }
+        }
+        
+        tempTarget.copy(nextWp);
+        tempTarget.y = posVec.y;
+        targetActive = true;
+        
+        // Dynamically accelerate based on how far she lags behind the player
+        if (currentWps.length > 5) {
+          currentSpeed = 4.2; // Sprint!
+        } else {
+          currentSpeed = 3.0; // Steady run
+        }
+      } else if (playerPos) {
+        // If we have no waypoints but player is still somewhat away, walk/run towards player
+        const distToPlayer = posVec.distanceTo(playerPos);
+        if (distToPlayer > 1.8) {
+          tempTarget.copy(playerPos);
+          tempTarget.y = posVec.y;
+          targetActive = true;
+          stopDist = 1.3;
+          currentSpeed = distToPlayer > 5 ? 3.0 : 1.8;
+        }
+      }
+    } else {
+      // Regular Lounge room navigation
+      if (currentInstruction.action === "move" && currentInstruction.target) {
+        tempTarget.set(
+          currentInstruction.target.x,
+          posVec.y,
+          currentInstruction.target.z,
+        );
+        targetActive = true;
+
+        if (currentInstruction.meta?.reason === "Summoned by mention")
+          stopDist = 1.5;
+        if (currentInstruction.meta?.reason === "Going to hug user")
+          stopDist = 0.38;
+        if (currentInstruction.meta?.reason === "Approaching to host user")
+          stopDist = 1.8;
+      }
+    }
+
+    if (targetActive) {
+      const dist = posVec.distanceTo(tempTarget);
 
       if (dist > stopDist) {
         isMoving = true;
 
         // --- Intelligent Obstacle Avoidance (Steering Behaviors) ---
-        _desiredVelocity.subVectors(target, posVec);
+        _desiredVelocity.subVectors(tempTarget, posVec);
         _desiredVelocity.y = 0;
         _desiredVelocity.normalize();
 
@@ -3012,7 +3193,7 @@ export const GemmaNPC: React.FC = () => {
         _currentQuat.set(currentRot.x, currentRot.y, currentRot.z, currentRot.w);
         _currentQuat.slerp(_targetQuat, 5 * delta);
         rigidBodyRef.current.setNextKinematicRotation(_currentQuat);
-      } else {
+      } else if (currentRoom !== 'arena') {
         // Arrived
         if (currentInstruction.meta?.pendingMessage) {
           console.log(
@@ -3054,7 +3235,7 @@ export const GemmaNPC: React.FC = () => {
             }
           });
 
-          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.4) {
+          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.90) {
             const lines = [
               "Hey! Let's hang out. How are you doing today?",
               "Welcome to the lounge! Just let me know if you want me to dance or switch outfits.",
@@ -3098,7 +3279,7 @@ export const GemmaNPC: React.FC = () => {
             }
           });
 
-          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.4) {
+          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.90) {
             handleGemmaInteraction(
               "Hey there! Just checking out these neat projection crystals of ours. Hope you're feeling welcome here! Feel free to ask me to dance or adjust my outfit styles whenever you'd like.",
               true,
@@ -3129,7 +3310,7 @@ export const GemmaNPC: React.FC = () => {
             }
           });
 
-          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.4) {
+          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.90) {
             handleGemmaInteraction(
               `Ah, keeping the gaming lounge tidy! I'm here as your host, so just let me know if there is anything you'd like to do. We could groove to some music if you want!`,
               true,
@@ -3173,6 +3354,30 @@ export const GemmaNPC: React.FC = () => {
         groupRef.current.position.add(step);
       } else {
         groupRef.current.position.lerp(new THREE.Vector3(0, 0, 0), 10 * delta);
+      }
+    }
+
+    // --- Combat Facing Override ---
+    // If we are actively shooting/targeting an enemy in combat, force her body to face them!
+    if (isHost && lastTargetedEnemyPosRef.current && groupRef.current && rigidBodyRef.current) {
+      const enemyTarget = _tempVec3.set(
+        lastTargetedEnemyPosRef.current.x,
+        0,
+        lastTargetedEnemyPosRef.current.z,
+      );
+      const dir = enemyTarget.sub(posVec);
+      dir.y = 0;
+      if (dir.lengthSq() > 0.01) {
+        const dirNormalized = dir.normalize();
+        const targetAngle = Math.atan2(dirNormalized.x, dirNormalized.z);
+        _targetQuat.setFromAxisAngle(_upAxis, targetAngle);
+
+        const currentRot = rigidBodyRef.current.rotation();
+        _currentQuat.set(currentRot.x, currentRot.y, currentRot.z, currentRot.w);
+        _currentQuat.slerp(_targetQuat, 7 * delta);
+        
+        rigidBodyRef.current.setNextKinematicRotation(_currentQuat);
+        groupRef.current.quaternion.copy(_currentQuat);
       }
     }
 
@@ -3443,7 +3648,6 @@ export const GemmaNPC: React.FC = () => {
       const isJumpingActive = jumpActionRef.current ? jumpActionRef.current.getEffectiveWeight() > 0.01 : false;
 
       // Idle
-      const time = t;
 
       // Randomize idle state periodically
       if (time > idleStateRef.current.nextChange && !isJumpingActive) {
@@ -3852,6 +4056,35 @@ export const GemmaNPC: React.FC = () => {
         // Tilt upper arms slightly forward (away from chest mesh to guarantee zero body clipping)
         leftArm.rotation.x -= 0.12;
         rightArm.rotation.x -= 0.12;
+      } else if (isHost && currentRoom === 'arena' && lastTargetedEnemyPosRef.current) {
+        // --- TACTICAL AIM/SHOOTING POSTURE ---
+        // Right Arm points forward at target (X rot: -1.4 is pointing straight forward, Z rot: -0.15 is slightly offset for chest clearance)
+        rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, -1.4, 15 * delta);
+        rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, -0.15, 15 * delta);
+        rightArm.rotation.y = THREE.MathUtils.lerp(rightArm.rotation.y, 0.0, 15 * delta);
+
+        if (rightLowerArm) {
+          rightLowerArm.rotation.x = THREE.MathUtils.lerp(rightLowerArm.rotation.x, -0.15, 15 * delta);
+        }
+
+        // Left arm is kept down in a relaxed or balancing state
+        leftArm.rotation.z = THREE.MathUtils.lerp(
+          leftArm.rotation.z,
+          -1.1 + Math.sin(time * 1.2) * 0.02,
+          10 * delta,
+        );
+        leftArm.rotation.x = THREE.MathUtils.lerp(
+          leftArm.rotation.x,
+          0.1,
+          10 * delta,
+        );
+        if (leftLowerArm) {
+          leftLowerArm.rotation.x = THREE.MathUtils.lerp(
+            leftLowerArm.rotation.x,
+            -0.1,
+            10 * delta,
+          );
+        }
       } else {
         leftArm.rotation.z = THREE.MathUtils.lerp(
           leftArm.rotation.z,
@@ -3942,6 +4175,26 @@ export const GemmaNPC: React.FC = () => {
           y: nextY,
           z: curTranslation.z,
         });
+      }
+    }
+
+    // Animate pulsing floor marker
+    if (floorMarkerRingRef.current) {
+      const pulse = Math.sin(t * 5.0) * 0.15;
+      floorMarkerRingRef.current.scale.set(1 + pulse, 1 + pulse, 1);
+      const mat = floorMarkerRingRef.current.material as THREE.MeshBasicMaterial;
+      if (mat) {
+        const baseOpacity = currentRoom === 'arena' ? 0.65 : 0.45;
+        mat.opacity = baseOpacity + pulse * 0.2;
+      }
+    }
+    if (floorMarkerCoreRef.current) {
+      const pulse = Math.sin(t * 5.0 + Math.PI) * 0.1;
+      floorMarkerCoreRef.current.scale.set(1 + pulse, 1 + pulse, 1);
+      const mat = floorMarkerCoreRef.current.material as THREE.MeshBasicMaterial;
+      if (mat) {
+        const baseOpacity = currentRoom === 'arena' ? 0.35 : 0.2;
+        mat.opacity = baseOpacity + pulse * 0.15;
       }
     }
 
@@ -4738,13 +4991,14 @@ export const GemmaNPC: React.FC = () => {
   };
 
   return (
-    <RigidBody
-      ref={rigidBodyRef}
-      type="kinematicPosition"
-      position={[0, 0, -5]}
-      rotation={[0, 0, 0]}
-      lockRotations
-    >
+    <>
+      <RigidBody
+        ref={rigidBodyRef}
+        type="kinematicPosition"
+        position={[0, 0, -5]}
+        rotation={[0, 0, 0]}
+        lockRotations
+      >
       <group ref={groupRef}>
         {vrm && (
           <>
@@ -4846,7 +5100,76 @@ export const GemmaNPC: React.FC = () => {
         )}
 
         <CapsuleCollider args={[0.5, 0.3]} position={[0, 0.8, 0]} />
+
+        {/* Subtle Glowing Pulse Floor Marker underneath Avatar */}
+        <group position={[0, 0.05, 0]}>
+          {/* Outer Ring */}
+          <mesh ref={floorMarkerRingRef} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[0.55, 0.65, 32]} />
+            <meshBasicMaterial 
+              color={currentRoom === 'arena' ? "#00f3ff" : "#d946ef"} 
+              transparent 
+              opacity={0.6} 
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+          {/* Inner Core Pulsing disk */}
+          <mesh ref={floorMarkerCoreRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.005, 0]}>
+            <ringGeometry args={[0.0, 0.53, 32]} />
+            <meshBasicMaterial 
+              color={currentRoom === 'arena' ? "#ff00a0" : "#a855f7"} 
+              transparent 
+              opacity={0.25} 
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+          {/* Subtle local point light underneath her feet mapping to the ground */}
+          <pointLight 
+            position={[0, 0.2, 0]} 
+            intensity={currentRoom === 'arena' ? 0.65 : 0.3} 
+            distance={2.0} 
+            color={currentRoom === 'arena' ? "#00f3ff" : "#a855f7"} 
+            decay={2}
+          />
+        </group>
       </group>
     </RigidBody>
-  );
+
+    {/* Absolute World-Space Beacons representing Gemma's path */}
+    {currentRoom === 'arena' && arenaWaypoints.map((wp, idx) => (
+      <group key={`wp-beacon-group-${idx}`}>
+        <mesh 
+          position={[wp.x, -0.49, wp.z]} 
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          {/* Inner solid glowing circle */}
+          <ringGeometry args={[0.0, 0.12, 16]} />
+          <meshBasicMaterial 
+            color="#ff00a0" 
+            transparent 
+            opacity={Math.max(0.05, 0.45 * (1.0 - idx / Math.max(1, arenaWaypoints.length)))} 
+            depthWrite={false} 
+            toneMapped={false} 
+          />
+        </mesh>
+        <mesh 
+          position={[wp.x, -0.49, wp.z]} 
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          {/* Outer Ring */}
+          <ringGeometry args={[0.18, 0.22, 16]} />
+          <meshBasicMaterial 
+            color="#00ffd0" 
+            transparent 
+            opacity={Math.max(0.03, 0.25 * (1.0 - idx / Math.max(1, arenaWaypoints.length)))} 
+            depthWrite={false} 
+            toneMapped={false} 
+          />
+        </mesh>
+      </group>
+    ))}
+  </>
+);
 };

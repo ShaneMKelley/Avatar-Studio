@@ -69,9 +69,14 @@ export const triggerLocalGesture = (gesture: string | null) => {
     syncService.broadcastChatMessage(`💅 is strutting the catwalk! Shock and awe! ✨`);
   }
 
+  if (gesture === 'victory') {
+    syncService.broadcastChatMessage(`🏆 claims GLORIOUS VICTORY in the neon arena! 🥇`);
+  }
+
   // Set duration based on gesture type
   let duration = 3000;
   if (gesture === 'strut') duration = 15000; // Strut lasts 15 seconds
+  if (gesture === 'victory') duration = 8000; // Victory lasts 8 seconds
   if (gesture === 'wave') duration = 2500;
   if (gesture === 'cheer') duration = 3000;
   if (gesture === 'dance') duration = 10000; // Dance lasts longer
