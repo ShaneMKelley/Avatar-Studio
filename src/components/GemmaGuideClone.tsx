@@ -102,10 +102,9 @@ export const GemmaGuideClone: React.FC<GemmaGuideCloneProps> = ({
     let active = true;
     const loader = new GLTFLoader();
     loader.register((parser) => {
-      const isWebGPU = isWebGPURendererActive();
       return new VRMLoaderPlugin(parser, {
         mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, {
-          materialType: isWebGPU ? MToonNodeMaterial : undefined,
+          materialType: undefined,
         })
       });
     });

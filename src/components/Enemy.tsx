@@ -20,6 +20,7 @@ import { BombardierEnemy } from './BombardierEnemy';
 import { OverseerEnemy } from './OverseerEnemy';
 import { DroneOperatorEnemy } from './DroneOperatorEnemy';
 import { SupportDroneEnemy } from './SupportDroneEnemy';
+import { idleTaskQueue } from '../utils/idleTaskQueue';
 
 interface SentinelModelProps {
   disabled?: boolean;
@@ -84,6 +85,20 @@ function SentinalModel({ disabled, speed, hitTrigger, shootTime, chargeState }: 
       });
       materials.current = mats;
     }
+
+    return () => {
+      // Deferred dispose of all cloned materials to prevent leaks without causing frame drops
+      if (materials.current.length > 0) {
+        materials.current.forEach((mat) => {
+          idleTaskQueue.enqueue(() => {
+            if (typeof mat.dispose === 'function') mat.dispose();
+          });
+        });
+      }
+      if (clone) {
+        idleTaskQueue.disposeDeferred(clone);
+      }
+    };
   }, [clone]);
 
   useEffect(() => {

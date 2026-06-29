@@ -61,6 +61,48 @@ export function unpackBoneData(userId: string, buffer: Float32Array): BoneSyncDa
   return data;
 }
 
+async function parseBinaryData(data: any): Promise<Float32Array | null> {
+  if (!data) return null;
+
+  // 1. Check constructor names to bypass iframe prototype boundaries
+  const constructorName = data.constructor?.name;
+
+  if (constructorName === 'Float32Array') {
+    return data as Float32Array;
+  }
+  if (constructorName === 'ArrayBuffer') {
+    return new Float32Array(data);
+  }
+  if (data.buffer && data.buffer.constructor?.name === 'ArrayBuffer') {
+    const offset = data.byteOffset || 0;
+    const length = data.byteLength || data.buffer.byteLength;
+    const sliced = data.buffer.slice(offset, offset + length);
+    return new Float32Array(sliced);
+  }
+  if (constructorName === 'Blob') {
+    const arrayBuffer = await data.arrayBuffer();
+    return new Float32Array(arrayBuffer);
+  }
+
+  // 2. Node.js Buffer serialized as JSON: { type: 'Buffer', data: [...] }
+  if (data.type === 'Buffer' && Array.isArray(data.data)) {
+    return new Float32Array(data.data);
+  }
+
+  // 3. General arrays or object of numbers
+  if (Array.isArray(data)) {
+    return new Float32Array(data);
+  }
+  if (typeof data === 'object') {
+    const values = Object.values(data) as number[];
+    if (values.length > 0) {
+      return new Float32Array(values);
+    }
+  }
+
+  return null;
+}
+
 class SyncService {
   private peer: Peer | null = null;
   private socket: Socket | null = null;
@@ -88,15 +130,33 @@ class SyncService {
     this.localUserId = uuidv4();
     useStore.getState().setLocalUserId(this.localUserId);
 
-    // Connect to Socket.IO server using only websocket transport to avoid polling errors in production
+    // Connect to Socket.IO server using both websocket and polling transports for maximum reliability
+    console.log("[Multiplayer Link] Initializing Socket.IO connection. Local User ID:", this.localUserId);
     this.socket = io({
-      transports: ['websocket'],
-      upgrade: false
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      rememberUpgrade: true,
+      timeout: 10000
     });
 
     this.socket.on("connect", () => {
-      console.log("Connected to signaling server");
+      console.log("[Multiplayer Link] Connected to signaling server successfully! Socket ID:", this.socket?.id);
       this.announcePresence();
+    });
+
+    if (this.socket.connected) {
+      console.log("[Multiplayer Link] Socket already connected on initialization!");
+      this.announcePresence();
+    }
+
+    this.socket.on("connect_error", (err) => {
+      console.error("Signaling server connection error:", err);
+      // Log it explicitly to our backend error route
+      fetch('/api/log-error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: 'SOCKET_CONNECT_ERROR', args: [err.message] }) }).catch(() => {});
+    });
+
+    this.socket.on("disconnect", (reason) => {
+      console.log("Disconnected from signaling server:", reason);
     });
 
     this.socket.on("init_state", (state: { users: any[], crystals: any[], physicsProps?: any[], sequencerGrid?: boolean[][] }) => {
@@ -185,27 +245,7 @@ class SyncService {
 
     this.socket.on("bone_data", async (payload: { userId: string, data: any }) => {
       try {
-        let buffer: Float32Array | null = null;
-        const data = payload.data;
-        
-        if (data instanceof Float32Array) {
-          buffer = data;
-        } else if (data instanceof ArrayBuffer) {
-          buffer = new Float32Array(data);
-        } else if (data.buffer && data.buffer instanceof ArrayBuffer) {
-          const offset = data.byteOffset || 0;
-          const length = data.byteLength || data.buffer.byteLength;
-          const sliced = data.buffer.slice(offset, offset + length);
-          buffer = new Float32Array(sliced);
-        } else if (data instanceof Blob) {
-          const arrayBuffer = await data.arrayBuffer();
-          buffer = new Float32Array(arrayBuffer);
-        } else if (typeof data === 'object' && data !== null) {
-          const values = Object.values(data) as number[];
-          if (values.length > 0) {
-            buffer = new Float32Array(values);
-          }
-        }
+        const buffer = await parseBinaryData(payload.data);
 
         if (buffer && buffer.length >= 79) {
           const unpacked = unpackBoneData(payload.userId, buffer);
@@ -227,27 +267,7 @@ class SyncService {
 
     this.socket.on("npc_bone_data", async (payload: { npcId: string, data: any }) => {
       try {
-        let buffer: Float32Array | null = null;
-        const data = payload.data;
-        
-        if (data instanceof Float32Array) {
-          buffer = data;
-        } else if (data instanceof ArrayBuffer) {
-          buffer = new Float32Array(data);
-        } else if (data.buffer && data.buffer instanceof ArrayBuffer) {
-          const offset = data.byteOffset || 0;
-          const length = data.byteLength || data.buffer.byteLength;
-          const sliced = data.buffer.slice(offset, offset + length);
-          buffer = new Float32Array(sliced);
-        } else if (data instanceof Blob) {
-          const arrayBuffer = await data.arrayBuffer();
-          buffer = new Float32Array(arrayBuffer);
-        } else if (typeof data === 'object' && data !== null) {
-          const values = Object.values(data) as number[];
-          if (values.length > 0) {
-            buffer = new Float32Array(values);
-          }
-        }
+        const buffer = await parseBinaryData(payload.data);
 
         if (buffer && buffer.length >= 79) {
           const unpacked = unpackBoneData(payload.npcId, buffer);
@@ -306,53 +326,58 @@ class SyncService {
       };
     }
 
-    this.peer = new Peer(this.localUserId, { debug: 0 });
+    try {
+      this.peer = new Peer(this.localUserId, { debug: 0 });
 
-    this.peer.on('open', (id) => {
-      console.log('My peer ID is: ' + id);
-    });
-
-    this.peer.on('disconnected', () => {
-      console.log('PeerJS disconnected. Reconnecting...');
-      if (this.peer && !this.peer.destroyed) {
-        this.peer.reconnect();
-      }
-    });
-
-    this.peer.on('error', (err: any) => {
-      if (err.type === 'peer-unavailable' || err.type === 'network' || err.type === 'webrtc' || err.type === 'server-error' || err.message?.includes('Could not connect to peer') || err.message?.includes('Lost connection to server')) {
-        console.warn('PeerJS non-fatal error:', err.type, err.message);
-        // We have Socket.IO fallback, so we can ignore these WebRTC connection issues
-        return;
-      }
-      console.warn('PeerJS error:', err);
-      if (err.type === 'unavailable-id') {
-        console.log('ID taken, generating new one...');
-        this.cleanup();
-        this.initialize();
-      }
-    });
-
-    this.peer.on('connection', (conn) => {
-      this.setupConnection(conn);
-    });
-
-    this.peer.on('call', (call) => {
-      const stream = useStore.getState().micStream;
-      if (stream) {
-        call.answer(stream);
-      } else {
-        call.answer();
-      }
-      
-      call.on('error', (err: any) => {
-        console.warn('PeerJS incoming call non-fatal error:', err);
+      this.peer.on('open', (id) => {
+        console.log('My peer ID is: ' + id);
       });
 
-      call.on('stream', (remoteStream) => {
-        useStore.getState().updateUser(call.peer, { stream: remoteStream });
+      this.peer.on('disconnected', () => {
+        console.log('PeerJS disconnected. Reconnecting...');
+        if (this.peer && !this.peer.destroyed) {
+          this.peer.reconnect();
+        }
       });
-    });
+
+      this.peer.on('error', (err: any) => {
+        if (err.type === 'peer-unavailable' || err.type === 'network' || err.type === 'webrtc' || err.type === 'server-error' || err.message?.includes('Could not connect to peer') || err.message?.includes('Lost connection to server')) {
+          console.warn('PeerJS non-fatal error:', err.type, err.message);
+          // We have Socket.IO fallback, so we can ignore these WebRTC connection issues
+          return;
+        }
+        console.warn('PeerJS error:', err);
+        if (err.type === 'unavailable-id') {
+          console.log('ID taken, generating new one...');
+          this.cleanup();
+          this.initialize();
+        }
+      });
+
+      this.peer.on('connection', (conn) => {
+        this.setupConnection(conn);
+      });
+
+      this.peer.on('call', (call) => {
+        const stream = useStore.getState().micStream;
+        if (stream) {
+          call.answer(stream);
+        } else {
+          call.answer();
+        }
+        
+        call.on('error', (err: any) => {
+          console.warn('PeerJS incoming call non-fatal error:', err);
+        });
+
+        call.on('stream', (remoteStream) => {
+          useStore.getState().updateUser(call.peer, { stream: remoteStream });
+        });
+      });
+    } catch (err) {
+      console.warn("[Multiplayer Link] PeerJS failed to initialize (adblocker or network restriction). Falling back to Socket.IO only.", err);
+      this.peer = null;
+    }
 
     window.addEventListener('beforeunload', () => {
       this.cleanup();
@@ -360,6 +385,7 @@ class SyncService {
   }
 
   private handleUserJoined(user: any) {
+    console.log("Handling user joined locally:", user.id);
     useStore.getState().updateUser(user.id, {
       name: user.name || `User-${user.id.slice(0, 4)}`,
       score: user.score || 0,
@@ -418,8 +444,8 @@ class SyncService {
           // Fallback for when Float32Array is serialized as a plain object
           const keys = Object.keys(data);
           if (keys.length >= 79 && !isNaN(Number(keys[0]))) {
-            buffer = new Float32Array(79);
-            for (let i = 0; i < 79; i++) {
+            buffer = new Float32Array(81);
+            for (let i = 0; i < 81; i++) {
               buffer[i] = data[i] || 0;
             }
           } else {

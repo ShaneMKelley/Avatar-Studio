@@ -1,4 +1,4 @@
-import React, { Suspense, useRef, useState, useMemo } from 'react';
+import React, { Suspense, useRef, useState, useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, PointerLockControls, Environment, Grid, useTexture, Stars, Text, Box, Html } from '@react-three/drei';
 import { Physics, RigidBody, interactionGroups, CuboidCollider } from '@react-three/rapier';
@@ -9,7 +9,7 @@ import { Avatar } from './Avatar';
 import { GemmaNPC } from './GemmaNPC';
 import { GemmaGuideClone } from './GemmaGuideClone';
 import { Crystals } from './Crystals';
-import { useStore } from '../store/useStore';
+import { useStore, DEFAULT_VRM_URL } from '../store/useStore';
 import { getTranslation } from '../utils/translations';
 import { useGameStore } from '../store';
 import { syncService } from '../services/sync';
@@ -23,8 +23,11 @@ import { OtherPlayer } from './OtherPlayer';
 import { Effects } from './Effects';
 import { Sequencer3D } from './Sequencer3D';
 import { useShallow } from 'zustand/react/shallow';
+import { idleTaskQueue } from '../utils/idleTaskQueue';
 import { SynthGarden } from './SynthGarden';
+import { LoungeBalcony } from './LoungeBalcony';
 import { createWebGPURenderer, isWebGPURendererActive } from '../utils/renderer';
+import { WebGPUSceneSanitizer } from './WebGPUSceneSanitizer';
 
 function GameLoop() {
   const updateTime = useGameStore(state => state.updateTime);
@@ -656,21 +659,38 @@ const sharedBoxGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
 const sharedSphereGeometry = new THREE.SphereGeometry(0.5, 32, 32);
 const sharedBoxMaterial = new THREE.MeshStandardMaterial({ roughness: 0.2, metalness: 0.1 });
 
+const PhysicsPropItem = React.memo(({ prop }: { prop: any }) => {
+  const material = useMemo(() => {
+    const mat = sharedBoxMaterial.clone();
+    mat.color.set(prop.color);
+    return mat;
+  }, [prop.color]);
+
+  useEffect(() => {
+    return () => {
+      idleTaskQueue.enqueue(() => {
+        material.dispose();
+      });
+    };
+  }, [material]);
+
+  const isSphere = prop.type === 'sphere';
+
+  return (
+    <RigidBody position={prop.position} colliders={isSphere ? "ball" : "cuboid"} mass={1} collisionGroups={interactionGroups(0, [0, 1, 2])}>
+      <mesh castShadow receiveShadow geometry={isSphere ? sharedSphereGeometry : sharedBoxGeometry} material={material} />
+    </RigidBody>
+  );
+});
+
 const PhysicsProps = React.memo(() => {
   const props = useStore(state => state.physicsProps);
 
   return (
     <>
-      {props.map((prop) => {
-        const material = sharedBoxMaterial.clone();
-        material.color.set(prop.color);
-        const isSphere = prop.type === 'sphere';
-        return (
-          <RigidBody key={prop.id} position={prop.position} colliders={isSphere ? "ball" : "cuboid"} mass={1} collisionGroups={interactionGroups(0, [0, 1, 2])}>
-            <mesh castShadow receiveShadow geometry={isSphere ? sharedSphereGeometry : sharedBoxGeometry} material={material} />
-          </RigidBody>
-        );
-      })}
+      {props.map((prop) => (
+        <PhysicsPropItem key={prop.id} prop={prop} />
+      ))}
     </>
   );
 });
@@ -830,7 +850,9 @@ export const Lounge: React.FC = () => {
   
   // Only re-render Lounge when users join/leave or change avatars
   const remoteUsersString = useStore(
-    state => Object.values(state.users).map(u => `${u.id}|${u.vrmUrl}`).join(',')
+    state => Object.values(state.users)
+      .filter(u => u.id !== state.localUserId)
+      .map(u => `${u.id}|${u.vrmUrl}`).join(',')
   );
   
   const remoteUsers = React.useMemo(() => {
@@ -840,6 +862,10 @@ export const Lounge: React.FC = () => {
       return { id, vrmUrl: vrmUrl === 'null' ? null : vrmUrl };
     });
   }, [remoteUsersString]);
+
+  React.useEffect(() => {
+    console.log("Remote users:", remoteUsers);
+  }, [remoteUsers]);
 
   // Guide Clones Synchronization & Automation Hooks
   const addGuideClone = useStore(state => state.addGuideClone);
@@ -965,6 +991,7 @@ export const Lounge: React.FC = () => {
         shadows={graphicsQuality !== 'low'}
         gl={createWebGPURenderer}
       >
+        <WebGPUSceneSanitizer />
         <color attach="background" args={[backgroundColorSetting]} />
         <fogExp2 attach="fog" args={[fogColor, fogDensity]} />
         <XR store={xrStore}>
@@ -1034,6 +1061,9 @@ export const Lounge: React.FC = () => {
             {/* Portals */}
             <PortalsDisplay />
 
+            {/* Raised Lounge Balcony */}
+            {currentRoom === 'main' && <LoungeBalcony />}
+
             {/* Boss Preview in Main Room Removed */}
 
             {/* Local User */}
@@ -1055,14 +1085,12 @@ export const Lounge: React.FC = () => {
 
             {/* Remote Users (Social Lounge) */}
             {currentRoom !== 'arena' && remoteUsers.map(user => (
-              user.vrmUrl && (
-                <Avatar 
-                  key={user.id} 
-                  url={user.vrmUrl} 
-                  isLocal={false} 
-                  userId={user.id} 
-                />
-              )
+              <Avatar 
+                key={user.id} 
+                url={user.vrmUrl || DEFAULT_VRM_URL} 
+                isLocal={false} 
+                userId={user.id} 
+              />
             ))}
 
             {/* Gemma Companion Assistant Guide Clones */}

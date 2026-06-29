@@ -12,6 +12,7 @@ import { OtherPlayer } from './OtherPlayer';
 import { Effects } from './Effects';
 import { useGameStore } from '../store';
 import { createWebGPURenderer } from '../utils/renderer';
+import { WebGPUSceneSanitizer } from './WebGPUSceneSanitizer';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useShallow } from 'zustand/react/shallow';
 import { useState, useEffect } from 'react';
@@ -65,6 +66,7 @@ export function Game() {
       dpr={isMobile ? [1, 1.5] : [1, 2]} // Lower DPR for mobile performance
       gl={createWebGPURenderer}
     >
+      <WebGPUSceneSanitizer />
       <color attach="background" args={['#050510']} />
       <fogExp2 attach="fog" args={['#050510', isMobile ? 0.04 : 0.025]} />
       

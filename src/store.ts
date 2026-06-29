@@ -319,16 +319,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let newSocket: Socket | null = null;
 
-    // Initialize multiplayer using only websocket transport to bypass polling in production
+    // Initialize multiplayer using both websocket and polling transports for maximum reliability
+    console.log("[Arena] Initializing Socket.IO connection for Arena Game.");
     newSocket = io({
-      transports: ['websocket'],
-      upgrade: false
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      rememberUpgrade: true,
+      timeout: 10000
     });
     
     newSocket.on('connect', () => {
+      console.log("[Arena] Connected to Arena socket server successfully! Socket ID:", newSocket?.id);
       const vrmUrl = useStore.getState().vrmUrl;
-      newSocket!.emit('joinGame', { vrmUrl });
+      const name = useStore.getState().localUserName;
+      newSocket!.emit('joinGame', { vrmUrl, name });
     });
+
+    if (newSocket.connected) {
+      console.log("[Arena] Socket already connected on initialization!");
+      const vrmUrl = useStore.getState().vrmUrl;
+      const name = useStore.getState().localUserName;
+      newSocket.emit('joinGame', { vrmUrl, name });
+    }
 
     newSocket.on('gameError', (msg: string) => {
       console.error('[Arena Game Error]', msg);

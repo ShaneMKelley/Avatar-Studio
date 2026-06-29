@@ -15,6 +15,7 @@ import { getProxyUrl } from '../utils/proxy';
 import { useGLTF, useAnimations, Html } from '@react-three/drei';
 import { SkeletonUtils } from 'three-stdlib';
 import { soundManager } from '../utils/soundManager';
+import { idleTaskQueue } from '../utils/idleTaskQueue';
 
 interface InfiltratorModelProps {
   disabled?: boolean;
@@ -102,6 +103,19 @@ function InfiltratorModel({ disabled, speed, hitTrigger, isStaggered, isLegDripp
       });
       materials.current = mats;
     }
+
+    return () => {
+      if (materials.current.length > 0) {
+        materials.current.forEach((mat) => {
+          idleTaskQueue.enqueue(() => {
+            if (typeof mat.dispose === 'function') mat.dispose();
+          });
+        });
+      }
+      if (clone) {
+        idleTaskQueue.disposeDeferred(clone);
+      }
+    };
   }, [clone]);
 
   // Main animation dispatcher to match smooth predatory crouches or swift charges

@@ -148,7 +148,7 @@ export const useStore = create<AppState>()(
       localUserName: `Player ${Math.floor(Math.random() * 10000)}`,
       localUserScore: 0,
       localUserGesture: null,
-      localUserPosition: [0, 0, 0],
+      localUserPosition: [(Math.random() - 0.5) * 4, 0, (Math.random() - 0.5) * 4],
       localUserRotation: [0, 0, 0],
       localSkybox: null,
       joystickVector: { x: 0, y: 0 },

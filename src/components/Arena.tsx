@@ -8,8 +8,9 @@ import { Grid, Stars, useGLTF } from '@react-three/drei';
 import { getProxyUrl } from '../utils/proxy';
 import { SkeletonUtils } from 'three-stdlib';
 import { useFrame } from '@react-three/fiber';
-import { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
+import { idleTaskQueue } from '../utils/idleTaskQueue';
 import { LeroyJenkinsRoom } from './LeroyJenkinsRoom';
 import { ArenaWeather } from './ArenaWeather';
 
@@ -323,16 +324,18 @@ export function Arena() {
       {obstacles.map((obs, i) => {
         if (!obs) return null;
         return (
-          <ArenaObstacle 
+          <ArenaObstacleCollider 
             key={i}
             index={i}
             type={obs.type}
             position={obs.position}
             rotation={obs.rotation}
-            color={obs.color}
           />
         );
       })}
+
+      {/* High-Performance Instanced Visual Meshes for Obstacles */}
+      <InstancedObstacles obstacles={obstacles} />
     </group>
   );
 }
@@ -413,79 +416,22 @@ interface ObstacleProps {
   index: number;
 }
 
-function ArenaObstacle({ type, position, rotation, color, index }: ObstacleProps) {
-  const carGltf = useGLTF(getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/brokenhollowcar.glb'));
-  const barricadeGltf = useGLTF(getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/boxbaricade.glb'));
-  const shieldGltf = useGLTF(getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/sheildbarrier.glb'));
-
-  // Select appropriate scene
-  const scene = useMemo(() => {
-    switch (type) {
-      case 'car': return carGltf.scene;
-      case 'barricade': return barricadeGltf.scene;
-      case 'shield': return shieldGltf.scene;
-      default: return barricadeGltf.scene;
-    }
-  }, [type, carGltf, barricadeGltf, shieldGltf]);
-
-  // Clone scene for multiple, independent instancing with custom properties
-  const clone = useMemo(() => {
-    const cloned = SkeletonUtils.clone(scene);
-    
-    // Compute collective absolute bounding box of the cloned asset
-    cloned.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(cloned);
-    const minY = box.min.y;
-    
-    // Offset local position upwards so the absolute bottom rests flush on y = 0
-    cloned.position.y = -minY;
-
-    cloned.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        
-        if (child.material) {
-          const mats = Array.isArray(child.material) ? child.material : [child.material];
-          mats.forEach((mat) => {
-            if (mat instanceof THREE.MeshStandardMaterial) {
-              const lowerName = mat.name ? mat.name.toLowerCase() : '';
-              
-              // Enable dynamic radiant neon emissives
-              if (lowerName.includes('glow') || lowerName.includes('neon') || lowerName.includes('light') || lowerName.includes('emission') || type === 'shield') {
-                const clonedMat = mat.clone();
-                clonedMat.emissive = new THREE.Color(color);
-                clonedMat.emissiveIntensity = 2.5;
-                clonedMat.toneMapped = false;
-                child.material = clonedMat;
-              }
-            }
-          });
-        }
-      }
-    });
-
-    return cloned;
-  }, [scene, color, type]);
-
-  // Setup scale and collider dimensions matching visual scale perfectly
+function ArenaObstacleCollider({ type, position, rotation, index }: Omit<ObstacleProps, 'color'>) {
+  // Setup collider dimensions matching visual scale perfectly
   const params = useMemo(() => {
     switch (type) {
       case 'car':
         return {
-          scale: [1.75, 1.75, 1.75] as [number, number, number],
           colArgs: [3.4, 1.0, 1.5] as [number, number, number], // half-size bounds matching larger scale coverage
           colPos: [0, 1.0, 0] as [number, number, number],
         };
       case 'barricade':
         return {
-          scale: [2.15, 2.15, 2.15] as [number, number, number],
           colArgs: [2.05, 1.7, 1.2] as [number, number, number], // half-size bounds matching larger scale coverage
           colPos: [0, 1.7, 0] as [number, number, number],
         };
       case 'shield':
         return {
-          scale: [2.45, 2.45, 2.45] as [number, number, number],
           colArgs: [2.7, 1.85, 0.55] as [number, number, number], // half-size bounds matching larger scale coverage
           colPos: [0, 1.85, 0] as [number, number, number],
         };
@@ -500,10 +446,211 @@ function ArenaObstacle({ type, position, rotation, color, index }: ObstacleProps
       rotation={rotation}
     >
       <CuboidCollider args={params.colArgs} position={params.colPos} />
-      <primitive object={clone} scale={params.scale} />
     </RigidBody>
   );
 }
+
+const GLTF_URLS = {
+  car: getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/brokenhollowcar.glb'),
+  barricade: getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/boxbaricade.glb'),
+  shield: getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/sheildbarrier.glb'),
+};
+
+interface InstancedObstacleGroupProps {
+  type: 'car' | 'barricade' | 'shield';
+  color: string;
+  instances: Array<{
+    position: [number, number, number];
+    rotation: [number, number, number];
+  }>;
+}
+
+const InstancedObstacleGroup = React.memo(({ type, color, instances }: InstancedObstacleGroupProps) => {
+  const url = GLTF_URLS[type];
+  const gltf = useGLTF(url);
+
+  // Setup scale factor
+  const scaleFactor = useMemo(() => {
+    switch (type) {
+      case 'car': return 1.75;
+      case 'barricade': return 2.15;
+      case 'shield': return 2.45;
+      default: return 1;
+    }
+  }, [type]);
+
+  // Extract meshes, create custom cloned materials for glows, and compute relative transforms
+  const meshData = useMemo(() => {
+    const list: Array<{
+      geometry: THREE.BufferGeometry;
+      material: THREE.Material;
+      relativeMatrix: THREE.Matrix4;
+    }> = [];
+
+    // Clone gltf scene structure to avoid mutating the cached GLTF in memory
+    const clonedScene = SkeletonUtils.clone(gltf.scene);
+    clonedScene.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(clonedScene);
+    const minY = box.min.y;
+    const T = new THREE.Matrix4().makeTranslation(0, -minY, 0);
+
+    clonedScene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        let childMaterial = child.material;
+
+        if (childMaterial) {
+          if (Array.isArray(childMaterial)) {
+            childMaterial = childMaterial.map((mat) => {
+              if (mat instanceof THREE.MeshStandardMaterial) {
+                const lowerName = mat.name ? mat.name.toLowerCase() : '';
+                if (lowerName.includes('glow') || lowerName.includes('neon') || lowerName.includes('light') || lowerName.includes('emission') || type === 'shield') {
+                  const clonedMat = mat.clone();
+                  clonedMat.emissive = new THREE.Color(color);
+                  clonedMat.emissiveIntensity = 2.5;
+                  clonedMat.toneMapped = false;
+                  return clonedMat;
+                }
+              }
+              return mat;
+            }) as any;
+          } else if (childMaterial instanceof THREE.MeshStandardMaterial) {
+            const lowerName = childMaterial.name ? childMaterial.name.toLowerCase() : '';
+            if (lowerName.includes('glow') || lowerName.includes('neon') || lowerName.includes('light') || lowerName.includes('emission') || type === 'shield') {
+              const clonedMat = childMaterial.clone();
+              clonedMat.emissive = new THREE.Color(color);
+              clonedMat.emissiveIntensity = 2.5;
+              clonedMat.toneMapped = false;
+              childMaterial = clonedMat;
+            }
+          }
+        }
+
+        const relativeMatrix = T.clone().multiply(child.matrixWorld);
+
+        list.push({
+          geometry: child.geometry,
+          material: childMaterial as THREE.Material,
+          relativeMatrix,
+        });
+      }
+    });
+
+    return list;
+  }, [gltf, type, color]);
+
+  // Dispose of cloned materials on unmount
+  useEffect(() => {
+    return () => {
+      meshData.forEach((data) => {
+        if (data.material) {
+          const mats = Array.isArray(data.material) ? data.material : [data.material];
+          mats.forEach((mat) => {
+            idleTaskQueue.enqueue(() => {
+              mat.dispose();
+            });
+          });
+        }
+      });
+    };
+  }, [meshData]);
+
+  const instancedMeshRefs = useRef<Array<THREE.InstancedMesh | null>>([]);
+
+  // Initialize and update matrices of instanced meshes
+  useEffect(() => {
+    if (instances.length === 0 || meshData.length === 0) return;
+
+    meshData.forEach((data, meshIdx) => {
+      const instMesh = instancedMeshRefs.current[meshIdx];
+      if (!instMesh) return;
+
+      const positionVec = new THREE.Vector3();
+      const rotationQuat = new THREE.Quaternion();
+      const scaleVec = new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor);
+      const instanceWorldMatrix = new THREE.Matrix4();
+      const finalMatrix = new THREE.Matrix4();
+
+      instances.forEach((inst, instIdx) => {
+        positionVec.set(inst.position[0], inst.position[1], inst.position[2]);
+        rotationQuat.setFromEuler(new THREE.Euler(inst.rotation[0], inst.rotation[1], inst.rotation[2]));
+
+        instanceWorldMatrix.compose(positionVec, rotationQuat, scaleVec);
+        finalMatrix.multiplyMatrices(instanceWorldMatrix, data.relativeMatrix);
+
+        instMesh.setMatrixAt(instIdx, finalMatrix);
+      });
+
+      instMesh.instanceMatrix.needsUpdate = true;
+    });
+  }, [instances, meshData, scaleFactor]);
+
+  return (
+    <group>
+      {meshData.map((data, idx) => (
+        <instancedMesh
+          key={idx}
+          ref={(el) => { instancedMeshRefs.current[idx] = el; }}
+          args={[data.geometry, data.material, instances.length]}
+          castShadow
+          receiveShadow
+        />
+      ))}
+    </group>
+  );
+});
+
+interface InstancedObstaclesProps {
+  obstacles: Array<{
+    type: 'car' | 'barricade' | 'shield';
+    position: [number, number, number];
+    rotation: [number, number, number];
+    color: string;
+  }>;
+}
+
+const InstancedObstacles = React.memo(({ obstacles }: InstancedObstaclesProps) => {
+  const groups = useMemo(() => {
+    const result: Record<string, {
+      type: 'car' | 'barricade' | 'shield';
+      color: string;
+      instances: Array<{
+        position: [number, number, number];
+        rotation: [number, number, number];
+      }>;
+    }> = {};
+
+    obstacles.forEach((obs) => {
+      const key = `${obs.type}_${obs.color}`;
+      if (!result[key]) {
+        result[key] = {
+          type: obs.type,
+          color: obs.color,
+          instances: [],
+        };
+      }
+      result[key].instances.push({
+        position: obs.position,
+        rotation: obs.rotation,
+      });
+    });
+
+    return Object.values(result);
+  }, [obstacles]);
+
+  return (
+    <group>
+      {groups.map((group, idx) => (
+        <InstancedObstacleGroup
+          key={idx}
+          type={group.type}
+          color={group.color}
+          instances={group.instances}
+        />
+      ))}
+    </group>
+  );
+});
 
 // Preload assets for ultra-smooth transition
 useGLTF.preload(getProxyUrl('https://storage.googleapis.com/gemmai-lounge-assets/GLB/brokenhollowcar.glb'));

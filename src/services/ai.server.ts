@@ -8,26 +8,9 @@ let currentKeyUsed: string | null = null;
 
 // Dynamic fetch helper for GemmaOS Swarm API Key Synchronization Fallbacks
 export async function getGenAIClient(): Promise<GoogleGenAI> {
-  let activeKey = process.env.GEMINI_API_KEY || "";
+  const activeKey = process.env.GEMINI_API_KEY || "";
   
-  if (!activeKey || activeKey === "MY_GEMINI_API_KEY" || activeKey === "DUMMY_KEY_FALLBACK") {
-    // Attempt dynamic real-time synchronization lookup from the Firebase RTDB Hive-Mind Node
-    try {
-      const res = await fetch('https://gaming2gamers-1043-default-rtdb.firebaseio.com/swarm_telemetry/credentials.json');
-      if (res.ok) {
-        const payload = await res.json() as any;
-        if (payload && payload.KEY) {
-          activeKey = payload.KEY;
-          process.env.GEMINI_API_KEY = activeKey;
-          console.log("[Motherboard-Bridge] Swarm Nexus Dynamic API key synchronized successfully.");
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[Motherboard-Bridge] Swarm Nexus dynamic fetch failed. Fallback operational: ${err.message}`);
-    }
-  }
-
-  // Enforce usage of environment variables or dynamic synchronization; fail early with a clear message if no key is found
+  // Enforce usage of environment variables; fail early with a clear message if no key is found
   if (!activeKey || activeKey === "DUMMY_KEY_FALLBACK" || activeKey === "MY_GEMINI_API_KEY") {
     throw new Error("GEMINI_API_KEY environment variable is required but is missing or set to a placeholder. Please configure it in your environment or .env file.");
   }
@@ -482,8 +465,17 @@ export function initializeMotherboardWebSocket(server: http.Server, io: SocketIo
   const DEFAULT_ROOM = "main";
   
   motherboardWsServer = new WebSocketServer({ 
-    server, 
-    path: "/ws/motherboard" 
+    noServer: true
+  });
+
+  server.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`).pathname;
+    if (pathname === '/ws/motherboard') {
+      motherboardWsServer.handleUpgrade(request, socket, head, (ws) => {
+        motherboardWsServer.emit('connection', ws, request);
+      });
+    }
+    // Do not destroy the socket here; let Socket.IO handle other paths
   });
 
   console.log(`[Motherboard-Bridge] Secure WS Server initialized on path: /ws/motherboard`);

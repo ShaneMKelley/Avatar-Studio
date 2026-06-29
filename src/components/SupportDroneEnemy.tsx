@@ -15,6 +15,7 @@ import { getProxyUrl } from '../utils/proxy';
 import { useGLTF, useAnimations, Html } from '@react-three/drei';
 import { SkeletonUtils } from 'three-stdlib';
 import { soundManager } from '../utils/soundManager';
+import { idleTaskQueue } from '../utils/idleTaskQueue';
 
 interface SupportDroneModelProps {
   disabled?: boolean;
@@ -55,6 +56,19 @@ function SupportDroneModel({ disabled }: SupportDroneModelProps) {
       });
       materials.current = mats;
     }
+
+    return () => {
+      if (materials.current.length > 0) {
+        materials.current.forEach((mat) => {
+          idleTaskQueue.enqueue(() => {
+            if (typeof mat.dispose === 'function') mat.dispose();
+          });
+        });
+      }
+      if (clone) {
+        idleTaskQueue.disposeDeferred(clone);
+      }
+    };
   }, [clone]);
 
   useEffect(() => {

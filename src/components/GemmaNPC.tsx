@@ -7,6 +7,8 @@ import {
   VRM,
   VRMUtils,
   VRMExpressionPresetName,
+  VRMSpringBoneCollider,
+  VRMSpringBoneColliderShapeSphere,
 } from "@pixiv/three-vrm";
 import { VRMAnimationLoaderPlugin, VRMAnimation, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import { MToonMaterialLoaderPlugin } from '@pixiv/three-vrm-materials-mtoon';
@@ -15,6 +17,7 @@ import {
   RigidBody,
   CapsuleCollider,
   RapierRigidBody,
+  interactionGroups,
 } from "@react-three/rapier";
 import * as THREE from "three";
 import { useStore } from "../store/useStore";
@@ -23,6 +26,7 @@ import { soundManager } from "../utils/soundManager";
 import { getTranslation } from "../utils/translations";
 import { syncService } from "../services/sync";
 import { convertVRMMaterialsForWebGPU, isWebGPURendererActive } from "../utils/renderer";
+import { findPath, NavObstacle } from "../utils/navMesh";
 
 import { SignatureHugEffect } from "./SignatureHugEffect";
 import { getProxyUrl } from "../utils/proxy";
@@ -44,6 +48,102 @@ interface AIInstruction {
   expression?: VRMExpressionPresetName;
 }
 
+const SCENIC_WAYPOINTS: Record<string, { x: number; y: number; z: number; name: string; quotes: string[] }[]> = {
+  main: [
+    { 
+      x: 0, y: 0, z: -5, 
+      name: "Cozy Seating area", 
+      quotes: ["I'm going to head over to the cozy seating area for a bit!", "I'll go check out the lounge seats!"] 
+    },
+    { 
+      x: 0, y: 0, z: -10, 
+      name: "Sequencer Stage", 
+      quotes: ["Going to check out the music sequencer stage!", "Let's see what beats are playing on the sequencer!"] 
+    },
+    { 
+      x: 10, y: 0, z: 0, 
+      name: "Neon Club Portal", 
+      quotes: ["Checking out the Neon Club entrance. Want to dance?", "Let's wander near the Club Portal!"] 
+    },
+    { 
+      x: -10, y: 0, z: 0, 
+      name: "Battle Arena Portal", 
+      quotes: ["Heading over to inspect the Battle Arena. Sounds intense!", "Taking a look near the Arena portal."] 
+    },
+    { 
+      x: 0, y: 0, z: -15, 
+      name: "Synth Garden entrance", 
+      quotes: ["Going to walk towards the Synth Garden gate!", "I want to smell the synthetic roses!"] 
+    },
+    {
+      x: 0, y: 0.1, z: 12.5,
+      name: "Lounge Balcony",
+      quotes: ["Stretching my legs on the lounge balcony!", "Going to enjoy the view from the balcony!"]
+    }
+  ],
+  club: [
+    { 
+      x: 0, y: 0, z: -8, 
+      name: "DJ Booth", 
+      quotes: ["I'm going to check out the DJ decks!", "Let's go stand near the DJ booth and feel the bass!"] 
+    },
+    { 
+      x: -6, y: 0, z: -2, 
+      name: "Left VIP Lounge", 
+      quotes: ["Heading over to the left VIP lounge!", "Going to lounge in the neon seating area!"] 
+    },
+    { 
+      x: 6, y: 0, z: -2, 
+      name: "Right VIP Lounge", 
+      quotes: ["Checking out the right side neon booths!", "Stretching my legs in the VIP lounge."] 
+    },
+    { 
+      x: 0, y: 0, z: 2, 
+      name: "Main Dance Floor", 
+      quotes: ["Going to wander onto the center of the dance floor!", "Let's get a spot on the main stage!"] 
+    }
+  ],
+  garden: [
+    { 
+      x: 0, y: 0, z: -6, 
+      name: "Crystal Pond", 
+      quotes: ["Going to check out the water reflections at the Crystal Pond!", "Let's take a stroll near the glowing pond."] 
+    },
+    { 
+      x: 5, y: 0, z: 4, 
+      name: "Right Flower Bed", 
+      quotes: ["Checking out the synth-orchid flower beds on the right!", "Let's inspect these beautiful neon flowers."] 
+    },
+    { 
+      x: -5, y: 0, z: 4, 
+      name: "Left Flower Bed", 
+      quotes: ["Heading over to smell the left flower beds!", "Ooh, these synthetic bluebells look so pretty!"] 
+    },
+    { 
+      x: 0, y: 0, z: 12, 
+      name: "Zen Fountain", 
+      quotes: ["Taking a stroll to the Zen fountain at the back!", "I'm going to listen to the fountain spray."] 
+    }
+  ],
+  arena: [
+    { 
+      x: 0, y: -0.5, z: -12, 
+      name: "Safe Zone perimeter", 
+      quotes: ["Inspecting the safe zone perimeter!", "Standing near the shield boundary."] 
+    },
+    { 
+      x: 8, y: -0.5, z: 2, 
+      name: "East Ammo Supply", 
+      quotes: ["Patrolling near the east supply crates!", "Checking on the tactical gear stations."] 
+    },
+    { 
+      x: -8, y: -0.5, z: 2, 
+      name: "West Generator", 
+      quotes: ["Going to monitor the western power generator!", "Making sure the shields are fully powered up."] 
+    }
+  ]
+};
+
 const TRIGGER_DISTANCE = 5.0;
 const INTERACTION_RADIUS = 3.0;
 const WALK_SPEED = 1.15;
@@ -62,6 +162,328 @@ const _upAxis = new THREE.Vector3(0, 1, 0);
 const _npcPosVec1 = new THREE.Vector3();
 const _npcPosVec2 = new THREE.Vector3();
 const _npcVelocity = new THREE.Vector3();
+
+// --- PRE-ALLOCATED IK VARIABLES (GC-free) ---
+const _ikTargetLeft = new THREE.Vector3();
+const _ikTargetRight = new THREE.Vector3();
+const _ikPoleLeft = new THREE.Vector3();
+const _ikPoleRight = new THREE.Vector3();
+const _shoulderLeftWorld = new THREE.Vector3();
+const _shoulderRightWorld = new THREE.Vector3();
+const _ik_groupForward = new THREE.Vector3();
+const _ik_groupRight = new THREE.Vector3();
+
+const _ik_pA = new THREE.Vector3();
+const _ik_vAT = new THREE.Vector3();
+const _ik_vAP = new THREE.Vector3();
+const _ik_planeNormal = new THREE.Vector3();
+const _ik_dirAT = new THREE.Vector3();
+const _ik_dirOrth = new THREE.Vector3();
+const _ik_dirUpper = new THREE.Vector3();
+const _ik_pB = new THREE.Vector3();
+const _ik_vBC = new THREE.Vector3();
+const _ik_pC = new THREE.Vector3();
+const _ik_parentWorldQuat = new THREE.Quaternion();
+const _ik_invParentWorldQuat = new THREE.Quaternion();
+const _ik_localTargetDirUpper = new THREE.Vector3();
+const _ik_localDefaultDirUpper = new THREE.Vector3();
+const _ik_localDefaultDirLower = new THREE.Vector3();
+const _ik_localDefaultPlaneNormal = new THREE.Vector3();
+const _ik_currentPlaneNormal = new THREE.Vector3();
+const _ik_targetLocalPlaneNormal = new THREE.Vector3();
+const _ik_projCurrent = new THREE.Vector3();
+const _ik_projTarget = new THREE.Vector3();
+const _ik_qUpper = new THREE.Quaternion();
+const _ik_qRoll = new THREE.Quaternion();
+const _ik_upperWorldQuat = new THREE.Quaternion();
+const _ik_invUpperWorldQuat = new THREE.Quaternion();
+const _ik_localTargetDirLower = new THREE.Vector3();
+const _ik_qLower = new THREE.Quaternion();
+
+// Torso & leg world coordinates for anatomical repulsion checks
+const _ik_hipsWorld = new THREE.Vector3();
+const _ik_spineWorld = new THREE.Vector3();
+const _ik_chestWorld = new THREE.Vector3();
+const _ik_leftThighWorld = new THREE.Vector3();
+const _ik_rightThighWorld = new THREE.Vector3();
+const _ik_vecToTarget = new THREE.Vector3();
+const _ik_elbowPushDir = new THREE.Vector3();
+
+/**
+ * Repels a world-space IK target from her core body spheres to prevent any clipping.
+ * Restricts movement to natural outward/forward boundaries.
+ */
+function applyAnatomicalRepulsion(
+  target: THREE.Vector3,
+  isLeft: boolean,
+  hipsPos: THREE.Vector3,
+  spinePos: THREE.Vector3,
+  chestPos: THREE.Vector3,
+  leftThighPos: THREE.Vector3,
+  rightThighPos: THREE.Vector3,
+  groupForward: THREE.Vector3,
+  groupRight: THREE.Vector3
+) {
+  // Define her core body volumes (repelling fields)
+  // Chest, Spine, Hips, and the active Leg thigh segment
+  const spheres = [
+    { center: chestPos, radius: 0.19, name: "chest" },
+    { center: spinePos, radius: 0.17, name: "spine" },
+    { center: hipsPos, radius: 0.22, name: "hips" },
+    { center: isLeft ? leftThighPos : rightThighPos, radius: 0.145, name: "thigh" }
+  ];
+
+  for (let i = 0; i < spheres.length; i++) {
+    const s = spheres[i];
+    _ik_vecToTarget.subVectors(target, s.center);
+    const d = _ik_vecToTarget.length();
+    const minD = s.radius;
+    if (d < minD) {
+      if (d > 0.001) {
+        _ik_vecToTarget.normalize();
+      } else {
+        // If target is exactly at center, push it outward relative to her side
+        _ik_vecToTarget.copy(groupRight).multiplyScalar(isLeft ? -1 : 1);
+      }
+      
+      // Project the repulsion direction into her local axes to ensure anatomical elegance
+      const dotRight = _ik_vecToTarget.dot(groupRight);
+      const dotForward = _ik_vecToTarget.dot(groupForward);
+      
+      // For her left arm, force push to her left (negative groupRight)
+      // For her right arm, force push to her right (positive groupRight)
+      let targetDotRight = dotRight;
+      if (isLeft) {
+        if (dotRight > -0.15) {
+          targetDotRight = -0.5; // force push outward left
+        }
+      } else {
+        if (dotRight < 0.15) {
+          targetDotRight = 0.5; // force push outward right
+        }
+      }
+
+      // Force push forward to clear her breasts or stomach/hips if the target is in front
+      let targetDotForward = dotForward;
+      if (dotForward > -0.1) {
+        targetDotForward = Math.max(dotForward, 0.45); // push forward to slide around front curve
+      }
+
+      // Reconstruct the safe repulsion direction
+      _ik_vecToTarget.copy(groupRight).multiplyScalar(targetDotRight)
+        .addScaledVector(groupForward, targetDotForward)
+        .normalize();
+
+      // Repel target to safe boundary plus dynamic buffer
+      const pushDist = minD - d + 0.02;
+      target.addScaledVector(_ik_vecToTarget, pushDist);
+    }
+  }
+}
+
+/**
+ * Solves Inverse Kinematics for a two-joint limb (e.g. Shoulder -> Elbow -> Wrist).
+ * Uses an analytical Law-of-Cosines solver, converting results to precise local quaternions.
+ */
+function solveTwoBoneIK(
+  upperArm: THREE.Object3D,
+  lowerArm: THREE.Object3D,
+  hand: THREE.Object3D,
+  targetWorldPos: THREE.Vector3,
+  poleWorldPos: THREE.Vector3,
+  isLeft: boolean,
+  influence: number
+) {
+  if (influence <= 0.001) return;
+
+  const L1 = lowerArm.position.length();
+  const L2 = hand.position.length();
+  if (L1 < 0.001 || L2 < 0.001) return;
+
+  // 1. Get world position of upper arm (Shoulder)
+  upperArm.getWorldPosition(_ik_pA);
+
+  // 2. Vector from Shoulder to Target
+  _ik_vAT.subVectors(targetWorldPos, _ik_pA);
+  const d = _ik_vAT.length();
+
+  // Clamp distance within physical range
+  const minD = Math.abs(L1 - L2) + 0.001;
+  const maxD = (L1 + L2) - 0.001;
+  const clampedD = THREE.MathUtils.clamp(d, minD, maxD);
+  _ik_vAT.setLength(clampedD);
+
+  // 3. Direction of Shoulder to Target
+  _ik_dirAT.copy(_ik_vAT).normalize();
+
+  // 4. Find perpendicular direction pointing towards the pole
+  _ik_vAP.subVectors(poleWorldPos, _ik_pA);
+  // Project pole vector onto the plane perpendicular to _ik_dirAT
+  const dotAP_AT = _ik_vAP.dot(_ik_dirAT);
+  _ik_dirOrth.copy(_ik_vAP).addScaledVector(_ik_dirAT, -dotAP_AT).normalize();
+  if (_ik_dirOrth.lengthSq() < 0.0001) {
+    // Fallback if pole is perfectly collinear with shoulder-target line
+    _ik_dirOrth.set(0, 1, 0); 
+  }
+
+  // 5. Law of Cosines to solve upper arm bend angle (alpha) and elbow bend angle (beta)
+  const cosAlpha = (L1 * L1 + clampedD * clampedD - L2 * L2) / (2 * L1 * clampedD);
+  const alpha = Math.acos(THREE.MathUtils.clamp(cosAlpha, -1, 1));
+  const cosBeta = (L1 * L1 + L2 * L2 - clampedD * clampedD) / (2 * L1 * L2);
+  const beta = Math.acos(THREE.MathUtils.clamp(cosBeta, -1, 1));
+
+  // Solve world-space upper arm direction (dir_SE)
+  _ik_dirUpper
+    .copy(_ik_dirAT)
+    .multiplyScalar(Math.cos(alpha))
+    .addScaledVector(_ik_dirOrth, Math.sin(alpha))
+    .normalize();
+
+  // 6. Solve Upper Arm (Shoulder) Rotation
+  if (upperArm.parent) {
+    upperArm.parent.getWorldQuaternion(_ik_parentWorldQuat);
+  } else {
+    _ik_parentWorldQuat.identity();
+  }
+  _ik_invParentWorldQuat.copy(_ik_parentWorldQuat).invert();
+
+  // Target upper arm direction in parent space
+  _ik_localTargetDirUpper.copy(_ik_dirUpper).applyQuaternion(_ik_invParentWorldQuat).normalize();
+
+  // Clamp local target vector components to prevent penetration of torso, ribs, and thighs
+  if (isLeft) {
+    // Left shoulder (Outward is +X, Inward is -X):
+    // Prevent pointing too far inward towards chest/ribs (negative X)
+    if (_ik_localTargetDirUpper.x < -0.15) {
+      _ik_localTargetDirUpper.x = -0.15;
+    }
+    // Prevent extreme backward extension (negative Z)
+    if (_ik_localTargetDirUpper.z < -0.4) {
+      _ik_localTargetDirUpper.z = -0.4;
+    }
+    // Flare arm outward if hanging low (prevents thigh/hip clipping)
+    if (_ik_localTargetDirUpper.y < -0.5) {
+      if (_ik_localTargetDirUpper.x < 0.15) {
+        _ik_localTargetDirUpper.x = 0.15;
+      }
+    }
+  } else {
+    // Right shoulder (Outward is -X, Inward is +X):
+    // Prevent pointing too far inward towards chest/ribs (positive X)
+    if (_ik_localTargetDirUpper.x > 0.15) {
+      _ik_localTargetDirUpper.x = 0.15;
+    }
+    // Prevent extreme backward extension (negative Z)
+    if (_ik_localTargetDirUpper.z < -0.4) {
+      _ik_localTargetDirUpper.z = -0.4;
+    }
+    // Flare arm outward if hanging low (prevents thigh/hip clipping)
+    if (_ik_localTargetDirUpper.y < -0.5) {
+      if (_ik_localTargetDirUpper.x > -0.15) {
+        _ik_localTargetDirUpper.x = -0.15;
+      }
+    }
+  }
+  _ik_localTargetDirUpper.normalize();
+
+  // Re-project the constrained direction vector back to world space
+  _ik_dirUpper.copy(_ik_localTargetDirUpper).applyQuaternion(_ik_parentWorldQuat).normalize();
+
+  // Calculate candidate elbow position
+  _ik_pB.copy(_ik_pA).addScaledVector(_ik_dirUpper, L1);
+
+  // Apply a dynamic collision buffer (skin width) around the torso geometry for the elbow joint
+  const skinWidth = 0.055; // ~5.5cm skin width collision buffer
+  const torsoSpheres = [
+    { center: _ik_chestWorld, radius: 0.19 + skinWidth },
+    { center: _ik_spineWorld, radius: 0.17 + skinWidth },
+    { center: _ik_hipsWorld, radius: 0.22 + skinWidth },
+    { center: isLeft ? _ik_leftThighWorld : _ik_rightThighWorld, radius: 0.145 + skinWidth }
+  ];
+
+  for (let iter = 0; iter < 2; iter++) {
+    let collided = false;
+    for (let i = 0; i < torsoSpheres.length; i++) {
+      const sphere = torsoSpheres[i];
+      const dist = _ik_pB.distanceTo(sphere.center);
+      if (dist < sphere.radius) {
+        collided = true;
+        _ik_elbowPushDir.subVectors(_ik_pB, sphere.center);
+        const lenSq = _ik_elbowPushDir.lengthSq();
+        if (lenSq < 0.0001) {
+          _ik_elbowPushDir.copy(_ik_groupRight).multiplyScalar(isLeft ? -1 : 1);
+        } else {
+          _ik_elbowPushDir.normalize();
+        }
+        // Push the elbow outside the sphere radius + skin width
+        _ik_pB.copy(sphere.center).addScaledVector(_ik_elbowPushDir, sphere.radius);
+      }
+    }
+    if (collided) {
+      // Re-constrain _ik_pB to be exactly L1 distance from the shoulder _ik_pA
+      _ik_dirUpper.subVectors(_ik_pB, _ik_pA).normalize();
+      _ik_pB.copy(_ik_pA).addScaledVector(_ik_dirUpper, L1);
+    } else {
+      break;
+    }
+  }
+
+  // Update target direction in parent space with the final safe/constrained elbow direction
+  _ik_localTargetDirUpper.copy(_ik_dirUpper).applyQuaternion(_ik_invParentWorldQuat).normalize();
+
+  // Default upper arm direction in local space (from upper arm to lower arm)
+  _ik_localDefaultDirUpper.copy(lowerArm.position).normalize();
+
+  // Align default bone direction to solved bone direction
+  _ik_qUpper.setFromUnitVectors(_ik_localDefaultDirUpper, _ik_localTargetDirUpper);
+
+  // Align elbow bend direction with the pole direction
+  _ik_localDefaultPlaneNormal.set(0, 0, 1); // both arms bend forward (+Z) by default
+  _ik_currentPlaneNormal.copy(_ik_localDefaultPlaneNormal).applyQuaternion(_ik_qUpper);
+  
+  // Target bend direction in parent space (which is dir_Orth pointing towards the pole)
+  _ik_targetLocalPlaneNormal.copy(_ik_dirOrth).applyQuaternion(_ik_invParentWorldQuat).normalize();
+
+  // Project both onto the plane perpendicular to _ik_localTargetDirUpper
+  _ik_projCurrent.copy(_ik_currentPlaneNormal).projectOnPlane(_ik_localTargetDirUpper).normalize();
+  _ik_projTarget.copy(_ik_targetLocalPlaneNormal).projectOnPlane(_ik_localTargetDirUpper).normalize();
+
+  // Calculate precise roll angle between current plane and target pole plane
+  const dotProj = THREE.MathUtils.clamp(_ik_projCurrent.dot(_ik_projTarget), -1, 1);
+  let rollAngle = Math.acos(dotProj);
+  
+  // Determine sign of roll using cross product
+  const crossRoll = new THREE.Vector3().crossVectors(_ik_projCurrent, _ik_projTarget);
+  if (crossRoll.dot(_ik_localTargetDirUpper) < 0) {
+    rollAngle = -rollAngle;
+  }
+  
+  // Clamp roll angle within safe, natural human bounds to prevent arm/shoulder deformation!
+  const MAX_ROLL = 1.05; // ~60 degrees
+  const clampedRoll = THREE.MathUtils.clamp(rollAngle, -MAX_ROLL, MAX_ROLL);
+  _ik_qRoll.setFromAxisAngle(_ik_localTargetDirUpper, clampedRoll);
+  _ik_qUpper.premultiply(_ik_qRoll);
+
+  // 7. Solve Lower Arm (Elbow) Rotation with human-like hinge joint constraints
+  // In standard VRM, the left and right elbows both bend around their local X-axis (forward bend).
+  // This avoids 3D twisting (roll) on the forearm, keeping the elbow deformation pristine and natural.
+  const bendAngle = Math.max(0.0, Math.min(Math.PI - 0.1, Math.PI - beta));
+  const hingeAxis = new THREE.Vector3(1, 0, 0);
+  
+  // Standard VRM bend: negative X rotation for forward bend
+  _ik_qLower.setFromAxisAngle(hingeAxis, -bendAngle);
+
+  // 8. Apply quaternions using influence weight
+  if (influence < 0.999) {
+    upperArm.quaternion.slerp(_ik_qUpper, influence);
+    lowerArm.quaternion.slerp(_ik_qLower, influence);
+  } else {
+    upperArm.quaternion.copy(_ik_qUpper);
+    lowerArm.quaternion.copy(_ik_qLower);
+  }
+
+  upperArm.updateMatrixWorld(true);
+}
 
 // Helper to detect language for SpeechSynthesis fallback to enable beautiful native accent voice mapping
 function detectLanguage(text: string): { lang: string; voicePart: string } {
@@ -701,6 +1123,12 @@ export const GemmaNPC: React.FC = () => {
   const [simonTarget, setSimonTarget] = useState<string | null>(null);
   const simonTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // SIMA-2 Autonomy and Cognitive Engine States
+  const [simaState, setSimaState] = useState<string>("IDLE_OBSERVING");
+  const [autonomyGoal, setAutonomyGoal] = useState<string>("COGNITIVE STARTUP");
+  const [autonomyThought, setAutonomyThought] = useState<string>("Initializing deep-mind neural pathfinder. Mapping coordinate planes.");
+  const lastSimaUpdateRef = useRef<number>(0);
+
   // Procedural Animation State
   const blinkStateRef = useRef({
     nextBlink: 0,
@@ -713,6 +1141,15 @@ export const GemmaNPC: React.FC = () => {
     targetHeadPitch: 0,
     nextChange: 0,
   });
+  const leanStateRef = useRef({
+    smoothedLocalVelocity: new THREE.Vector3(),
+    currentLeanPitch: 0,
+    currentLeanRoll: 0,
+  });
+  const ikTargetLeftCurrentRef = useRef<THREE.Vector3 | null>(null);
+  const ikTargetRightCurrentRef = useRef<THREE.Vector3 | null>(null);
+  const smoothedLeftIKInfluenceRef = useRef<number>(1.0);
+  const smoothedRightIKInfluenceRef = useRef<number>(1.0);
   const lookAtTargetRef = useRef(new THREE.Object3D());
   const saccadeStateRef = useRef({
     lastChangeTime: 0,
@@ -776,6 +1213,11 @@ export const GemmaNPC: React.FC = () => {
   const arenaWaypointsRef = useRef<THREE.Vector3[]>([]);
   const floorMarkerRingRef = useRef<THREE.Mesh>(null);
   const floorMarkerCoreRef = useRef<THREE.Mesh>(null);
+
+  // Dynamic Cost Map pathfinding states & refs
+  const [navPathWaypoints, setNavPathWaypoints] = useState<THREE.Vector3[]>([]);
+  const navPathWaypointsRef = useRef<THREE.Vector3[]>([]);
+  const lastPathRecalcTimeRef = useRef<number>(0);
 
   // Remote Sync State
   const targetBones = useRef<Record<string, THREE.Quaternion>>({});
@@ -879,15 +1321,56 @@ export const GemmaNPC: React.FC = () => {
   // Fetch GCS VRMA Index on startup
   useEffect(() => {
     fetch("/api/list-vrma-animations")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP status ${res.status}`);
+        }
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+          throw new Error("Response is not JSON");
+        }
+        return res.json();
+      })
       .then((data) => {
-        if (data.success && Array.isArray(data.animations)) {
+        if (data && data.success && Array.isArray(data.animations)) {
           setVrmaIndex(data.animations);
           vrmaIndexRef.current = data.animations;
           console.log(`[GemmaNPC-SignLanguage] Indexed ${data.animations.length} sign VRMA animations from GCS bucket`);
         }
       })
-      .catch((err) => console.error("[GemmaNPC-SignLanguage] Error fetching GCS VRMA map:", err));
+      .catch((err) => {
+        console.warn("[GemmaNPC-SignLanguage] API fetch failed, utilizing full local fallback sign language index:", err.message);
+        const fallbackLetters = [
+          "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+          "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+          "adhd", "alt", "writing", "zone", "atm", "antigravity"
+        ];
+        const localFallbackAnimations = fallbackLetters.map(letter => {
+          let filename = `SG ASL ${letter.toUpperCase()} 2024-6-16 No Mesh Mixamo.vrma`;
+          if (letter === "0") filename = "SG ASL 0 2024-6-17 No Mesh Mixamo.vrma";
+          else if (letter === "1") filename = "SG ASL 1 2024-6-15 No Mesh Mixamo.vrma";
+          else if (letter === "10") filename = "SG ASL 10 2024-6-15 No Mesh Mixamo.vrma";
+          else if (["2", "3", "4", "5", "6"].includes(letter)) filename = `SG ASL ${letter} 2024-6-15 No Mesh Mixamo.vrma`;
+          else if (["7", "8", "9"].includes(letter)) filename = `SG ASL ${letter} 2024-6-16 No Mesh Mixamo.vrma`;
+          else if (letter === "adhd") filename = "SG ASL ADHD 1 2023-8-16 No Mesh Mixamo.vrma";
+          else if (letter === "alt") filename = "SG ASL Alt 1 2023-9-5 No Mesh Mixamo.vrma";
+          else if (letter === "writing") filename = "SG ASL Writing 2023-9-5 No Mesh Mixamo.vrma";
+          else if (letter === "zone") filename = "SG ASL Zone 2023-9-6 No Mesh Mixamo.vrma";
+          else if (letter === "atm") filename = "SG ASL ATM 2 2023-10-12 No Mesh Mixamo.vrma";
+          else if (letter === "antigravity") filename = "SG ASL Antigravity 1 2023-7-10 No Mesh Mixamo.vrma";
+
+          return {
+            name: filename,
+            path: `VRM/VRMA/SL/${filename}`,
+            url: `https://storage.googleapis.com/gemmai-lounge-assets/VRM/VRMA/SL/${encodeURIComponent(filename)}`,
+            keyword: letter,
+            rootWord: undefined,
+            isV2: false
+          };
+        });
+        setVrmaIndex(localFallbackAnimations);
+        vrmaIndexRef.current = localFallbackAnimations;
+      });
 
     return () => {
       if (signTimeoutRef.current) clearTimeout(signTimeoutRef.current);
@@ -1448,10 +1931,9 @@ export const GemmaNPC: React.FC = () => {
     let active = true;
     const loader = new GLTFLoader();
     loader.register((parser) => {
-      const isWebGPU = isWebGPURendererActive();
       return new VRMLoaderPlugin(parser, {
         mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, {
-          materialType: isWebGPU ? MToonNodeMaterial : undefined,
+          materialType: undefined,
         })
       });
     });
@@ -1472,7 +1954,18 @@ export const GemmaNPC: React.FC = () => {
         // Run high-fidelity compatibility transcode for WebGPU Materials
         convertVRMMaterialsForWebGPU(vrmData.scene);
 
-        // Initial Pose (Relaxed A-Pose)
+        // Initial Pose (Relaxed A-Pose) & IK Fixes
+        const fixArmRotations = (boneName: string) => {
+          const bone = vrmData.humanoid?.getNormalizedBoneNode(boneName as any);
+          if (bone) bone.rotation.order = "YXZ";
+        };
+        fixArmRotations("leftUpperArm");
+        fixArmRotations("leftLowerArm");
+        fixArmRotations("leftHand");
+        fixArmRotations("rightUpperArm");
+        fixArmRotations("rightLowerArm");
+        fixArmRotations("rightHand");
+
         const leftUpperArm =
           vrmData.humanoid?.getNormalizedBoneNode("leftUpperArm");
         if (leftUpperArm) leftUpperArm.rotation.z = -1.0;
@@ -1557,6 +2050,140 @@ export const GemmaNPC: React.FC = () => {
 
         // Refine Physics (Jiggle)
         if (vrmData.springBoneManager) {
+          // --- ADD HIGH-PRECISION CUSTOM COLLIDERS TO PREVENT CLIPPING ---
+          const humanoid = vrmData.humanoid;
+          if (humanoid) {
+            const addedColliders: any[] = [];
+
+            const createSphereCollider = (boneNode: THREE.Object3D, radius: number, offsetX = 0, offsetY = 0, offsetZ = 0) => {
+              try {
+                const shape = new VRMSpringBoneColliderShapeSphere({
+                  radius: radius,
+                  offset: new THREE.Vector3(offsetX, offsetY, offsetZ)
+                });
+                const collider = new VRMSpringBoneCollider(shape);
+                collider.name = `GemmaCustomCollider_${boneNode.name}_R${radius}`;
+                boneNode.add(collider);
+                addedColliders.push(collider);
+              } catch (err) {
+                console.warn(`Failed to create sphere collider for bone: ${boneNode.name}`, err);
+              }
+            };
+
+            // 1. Torso Colliders (Chest, Spine, UpperChest, Hips)
+            const chestNode = humanoid.getNormalizedBoneNode("chest") || humanoid.getNormalizedBoneNode("upperChest");
+            if (chestNode) {
+              // Overlapping chest spheres to protect front (chest, breasts) and back
+              createSphereCollider(chestNode, 0.17, 0, 0.05, 0.02); // Main upper torso
+              createSphereCollider(chestNode, 0.115, 0.06, 0.04, 0.08); // Right breast area
+              createSphereCollider(chestNode, 0.115, -0.06, 0.04, 0.08); // Left breast area
+              createSphereCollider(chestNode, 0.15, 0, 0.05, -0.05); // Upper back area
+            }
+
+            const spineNode = humanoid.getNormalizedBoneNode("spine");
+            if (spineNode) {
+              createSphereCollider(spineNode, 0.18, 0, 0.02, 0); // Mid-spine torso body
+            }
+
+            const hipsNode = humanoid.getNormalizedBoneNode("hips");
+            if (hipsNode) {
+              createSphereCollider(hipsNode, 0.20, 0, 0.05, 0.01); // Pelvis/hips area to protect skirts/pants
+            }
+
+            const headNode = humanoid.getNormalizedBoneNode("head");
+            if (headNode) {
+              createSphereCollider(headNode, 0.115, 0, 0.04, -0.02); // Back and side of the skull
+            }
+
+            // Helper to add colliders along limbs
+            const addLimbColliders = (upperName: string, lowerName: string, handName: string, isLeft: boolean) => {
+              const upperNode = humanoid.getNormalizedBoneNode(upperName as any);
+              const lowerNode = humanoid.getNormalizedBoneNode(lowerName as any);
+              const handNode = humanoid.getNormalizedBoneNode(handName as any);
+
+              if (upperNode && lowerNode) {
+                const dir = lowerNode.position.clone();
+                const len = dir.length();
+                if (len > 0.01) {
+                  const steps = 3;
+                  for (let i = 0; i < steps; i++) {
+                    const t = (i + 0.5) / steps;
+                    const pos = dir.clone().multiplyScalar(t);
+                    const r = 0.085 - t * 0.015;
+                    createSphereCollider(upperNode, r, pos.x, pos.y, pos.z);
+                  }
+                }
+              }
+
+              if (lowerNode && handNode) {
+                const dir = handNode.position.clone();
+                const len = dir.length();
+                if (len > 0.01) {
+                  const steps = 3;
+                  for (let i = 0; i < steps; i++) {
+                    const t = (i + 0.5) / steps;
+                    const pos = dir.clone().multiplyScalar(t);
+                    const r = 0.075 - t * 0.025;
+                    createSphereCollider(lowerNode, r, pos.x, pos.y, pos.z);
+                  }
+                }
+              }
+
+              if (handNode) {
+                createSphereCollider(handNode, 0.055, 0, 0, 0);
+              }
+            };
+
+            // 2. Arm Colliders
+            addLimbColliders("leftUpperArm", "leftLowerArm", "leftHand", true);
+            addLimbColliders("rightUpperArm", "rightLowerArm", "rightHand", false);
+
+            // 3. Leg/Thigh Colliders (Upper legs)
+            const addLegColliders = (upperLegName: string, lowerLegName: string) => {
+              const upperNode = humanoid.getNormalizedBoneNode(upperLegName as any);
+              const lowerNode = humanoid.getNormalizedBoneNode(lowerLegName as any);
+              if (upperNode && lowerNode) {
+                const dir = lowerNode.position.clone();
+                const len = dir.length();
+                if (len > 0.01) {
+                  const steps = 3;
+                  for (let i = 0; i < steps; i++) {
+                    const t = (i + 0.5) / steps;
+                    const pos = dir.clone().multiplyScalar(t);
+                    const r = 0.11 - t * 0.02;
+                    createSphereCollider(upperNode, r, pos.x, pos.y, pos.z);
+                  }
+                }
+              }
+            };
+
+            addLegColliders("leftUpperLeg", "leftLowerLeg");
+            addLegColliders("rightUpperLeg", "rightLowerLeg");
+
+            if (addedColliders.length > 0) {
+              console.log(`[GemmaNPC-Physics] Dynamically created ${addedColliders.length} high-fidelity body surface colliders to prevent mesh clipping!`);
+              
+              const customGroup = {
+                name: "GemmaCustomDynamicSurfaceColliders",
+                colliders: addedColliders
+              };
+
+              const springManager = vrmData.springBoneManager as any;
+              if (springManager.colliderGroups) {
+                springManager.colliderGroups.push(customGroup);
+              }
+
+              if (springManager.joints) {
+                springManager.joints.forEach((joint: any) => {
+                  if (!joint.colliderGroups) {
+                    joint.colliderGroups = [];
+                  }
+                  joint.colliderGroups.push(customGroup);
+                });
+              }
+            }
+          }
+
           // --- ANTI-CLIPPING: Inflate body colliders ---
           // Access the static bounds (legs, hips, torso) and inflate them so
           // clothing spring bones bounce further away from the skin.
@@ -1598,7 +2225,16 @@ export const GemmaNPC: React.FC = () => {
           vrmData.springBoneManager.joints.forEach((joint) => {
             const name = joint.bone.name.toLowerCase();
 
-            if (name.includes("hair")) {
+            if (
+              name.includes("bust") ||
+              name.includes("breast") ||
+              name.includes("oppai") ||
+              name.includes("mune")
+            ) {
+              // Bust/Breasts: moderate stiffness and balanced damping/drag for subtle, natural movement (jiggle)
+              joint.settings.stiffness *= 1.3;
+              joint.settings.dragForce *= 1.8;
+            } else if (name.includes("hair")) {
               // Hair: bouncy, light, flows easily
               joint.settings.stiffness *= 0.4;
               joint.settings.dragForce *= 0.5;
@@ -1870,9 +2506,21 @@ export const GemmaNPC: React.FC = () => {
         );
       },
       undefined,
-      (error) => {
-        console.error("Failed to load Gemma VRM:", error);
-        if (retries > 0) {
+      (error: any) => {
+        const errorMessage = String(error?.message || error || '');
+        const isHtmlError = error instanceof SyntaxError || 
+                            errorMessage.includes('Unexpected token') || 
+                            errorMessage.includes('<!doctype') || 
+                            errorMessage.includes('JSON');
+        const isNotFoundError = errorMessage.includes('404');
+        
+        if (!isHtmlError && !isNotFoundError) {
+          console.error(`Failed to load Gemma VRM from ${targetUrl}:`, error);
+        } else {
+          console.warn(`Could not load Gemma VRM from ${targetUrl} (404/invalid format).`);
+        }
+
+        if (retries > 0 && !isHtmlError && !isNotFoundError) {
           const delay = (4 - retries) * 1500;
           console.warn(`[GemmaNPC] Retrying VRM load in ${delay}ms... (${retries} attempts left)`);
           setTimeout(() => {
@@ -1880,6 +2528,11 @@ export const GemmaNPC: React.FC = () => {
               loadGemma(targetUrl, retries - 1);
             }
           }, delay);
+        } else if (targetUrl !== "https://storage.googleapis.com/gemmai-lounge-assets/VRM/Cat.vrm") {
+          console.warn("[GemmaNPC] Attempting fallback from broken URL to default Cat VRM...");
+          if (active) {
+            setVrmUrl("https://storage.googleapis.com/gemmai-lounge-assets/VRM/Cat.vrm");
+          }
         }
       },
     );
@@ -1892,7 +2545,7 @@ export const GemmaNPC: React.FC = () => {
   };
 }, [vrmUrl]);
 
-  // --- THE BRAIN: Autonomous Decision Loop ---
+  // --- THE BRAIN: Autonomous Decision Loop (SIMA-2 FSM) ---
   useEffect(() => {
     if (!isHost) return;
     const think = () => {
@@ -1927,6 +2580,9 @@ export const GemmaNPC: React.FC = () => {
 
       // Sleep mode: If everyone is far away, do nothing and check again in 5 seconds (bypass if solo companion mode)
       if (minUserDist > 30 && !latestIsSolo) {
+        setSimaState("IDLE_OBSERVING");
+        setAutonomyGoal("HIBERNATION / STANDBY");
+        setAutonomyThought("All users out of proximity. Transitioning cognitive matrix to background energy saver.");
         setCurrentInstruction({
           action: "idle",
           duration: 5000,
@@ -1969,9 +2625,18 @@ export const GemmaNPC: React.FC = () => {
         }
       });
 
+      // Default variables for FSM transitions
+      let nextState = "IDLE_OBSERVING";
+      let nextGoal = "STANDBY MONITORING";
+      let nextThought = "Awaiting natural language commands from motherboard or local user.";
       let newInstruction: AIInstruction;
 
+      // FSM DECISION ENGINE
+      // 1. Arena mode -> Companion Sync State
       if (latestCurrentRoom === 'arena') {
+        nextState = "COMPANION_SYNC";
+        nextGoal = "ARENA SURVEY / FIGHT";
+        nextThought = "Providing active tactical coverage. Analyzing combat shield parameters.";
         newInstruction = {
           action: "move",
           target: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
@@ -1982,160 +2647,29 @@ export const GemmaNPC: React.FC = () => {
             reason: "Arena Combat Assistant Active",
           },
         };
-        console.log(
-          "🧠 Gemma Brain Instruction:",
-          JSON.stringify(newInstruction),
-        );
-        setCurrentInstruction(newInstruction);
-        return;
       }
-
-      // Special partner companion prioritized behaviors if player is alone (isSolo)
-      if (latestIsSolo) {
-        if (minUserDist > 5.5) {
-          // Player moved away - run to catch up with them!
-          newInstruction = {
-            action: "move",
-            target: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-            gait: "run",
-            hands: "relaxed",
-            expression: VRMExpressionPresetName.Relaxed,
-            meta: {
-              reason: "Running to catch up with partner",
-            },
-          };
-        } else if (minUserDist > 2.2) {
-          // Walk closer to standard conversation proximity (keeping polite social distance of ~1.3 meters)
-          const dirX = currentPosVec.x - nearestUserPos.x;
-          const dirZ = currentPosVec.z - nearestUserPos.z;
-          const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
-          let targetX = nearestUserPos.x;
-          let targetZ = nearestUserPos.z;
-          if (len > 0.1) {
-            targetX = nearestUserPos.x + (dirX / len) * 1.3;
-            targetZ = nearestUserPos.z + (dirZ / len) * 1.3;
-          } else {
-            targetX = currentPosVec.x + (Math.random() - 0.5) * 1.2;
-            targetZ = currentPosVec.z + (Math.random() - 0.5) * 1.2;
-          }
-
-          newInstruction = {
-            action: "move",
-            target: { x: targetX, y: 0, z: targetZ },
-            gait: Math.random() > 0.5 ? "strut" : "walk",
-            hands: Math.random() > 0.6 ? "hips" : "relaxed",
-            expression: VRMExpressionPresetName.Happy,
-            meta: {
-              reason: "Strolling alongside partner",
-            },
-          };
-        } else if (minUserDist < 0.9) {
-          const now = Date.now();
-          if (localUserGesture === "hug" && now - lastHugTimeRef.current > 10000) {
-            // Super close + player wants to hug - hug partner!
-            lastHugTimeRef.current = now;
-            newInstruction = {
-              action: "interact",
-              lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-              duration: 2500,
-              hands: "hug",
-              expression: VRMExpressionPresetName.Happy,
-            };
-          } else {
-            // Stand close with a standard room animation/gesture, breaking the hug loop
-            let randExp: VRMExpressionPresetName = VRMExpressionPresetName.Relaxed;
-            const r = Math.random();
-            if (r > 0.7) randExp = VRMExpressionPresetName.Happy;
-            else if (r > 0.4) randExp = VRMExpressionPresetName.Neutral;
-
-            const gestureOptions: ("relaxed" | "hips" | "explaining" | "cheer" | "dance" | "wave")[] = ["hips", "explaining"];
-            
-            if (latestCurrentRoom === 'club') {
-              gestureOptions.push("dance");
-            } else if (latestCurrentRoom === 'arena') {
-              gestureOptions.push("cheer");
-            } else if (latestCurrentRoom === 'garden') {
-              gestureOptions.push("relaxed", "wave");
-            }
-
-            const chosenGesture = gestureOptions[Math.floor(Math.random() * gestureOptions.length)];
-
-            newInstruction = {
-              action: "interact",
-              lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-              duration: 2000 + Math.random() * 2000,
-              hands: chosenGesture,
-              expression: randExp,
-            };
-          }
-        } else {
-          // Standing close (not hugging range) - do a delightful room-specific animation / gesture!
-          let randExp: VRMExpressionPresetName = VRMExpressionPresetName.Relaxed;
-          const r = Math.random();
-          if (r > 0.7) randExp = VRMExpressionPresetName.Happy;
-          else if (r > 0.4) randExp = VRMExpressionPresetName.Neutral;
-
-          const gestureOptions: ("relaxed" | "hips" | "explaining" | "cheer" | "dance" | "wave")[] = ["hips", "explaining"];
-          
-          if (latestCurrentRoom === 'club') {
-            gestureOptions.push("dance");
-          } else if (latestCurrentRoom === 'arena') {
-            gestureOptions.push("cheer");
-          } else if (latestCurrentRoom === 'garden') {
-            gestureOptions.push("relaxed", "wave");
-          }
-
-          const chosenGesture = gestureOptions[Math.floor(Math.random() * gestureOptions.length)];
-
-          newInstruction = {
-            action: "interact",
-            lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-            duration: 2000 + Math.random() * 2000,
-            hands: chosenGesture,
-            expression: randExp,
-          };
-        }
-      }
-      // Standard multi-user NPC social decision tree
-      else if (minUserDist < 0.9) {
-        const now = Date.now();
-        if (localUserGesture === "hug" && now - lastHugTimeRef.current > 10000) {
-          lastHugTimeRef.current = now;
-          newInstruction = {
-            action: "interact",
-            lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-            duration: 3000,
-            hands: "hug",
-            expression: VRMExpressionPresetName.Happy, // Hugs should always be happy and warm!
-          };
-        } else {
-          newInstruction = {
-            action: "interact",
-            lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-            duration: 2000 + Math.random() * 2000,
-            hands: Math.random() > 0.5 ? "explaining" : "hips",
-            expression: VRMExpressionPresetName.Relaxed,
-          };
-        }
-      }
-      // Priority 2: Interaction (if somewhat close)
-      else if (minUserDist < INTERACTION_RADIUS) {
-        let randExp: VRMExpressionPresetName = VRMExpressionPresetName.Neutral;
-        const r = Math.random();
-        if (r > 0.8) randExp = VRMExpressionPresetName.Happy;
-        else if (r > 0.5) randExp = VRMExpressionPresetName.Relaxed;
-
+      // 2. Catch up with far user -> Companion Sync State
+      else if (latestIsSolo && minUserDist > 5.5) {
+        nextState = "COMPANION_SYNC";
+        nextGoal = "PARTNER INTERCEPT";
+        nextThought = "Companion has exceeded social spacing threshold. Fast pathfinding catchup initiated.";
         newInstruction = {
-          action: "interact",
-          lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
-          duration: 2000 + Math.random() * 2000,
-          hands: Math.random() > 0.5 ? "explaining" : "hips",
-          expression: randExp,
+          action: "move",
+          target: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
+          gait: "run",
+          hands: "relaxed",
+          expression: VRMExpressionPresetName.Relaxed,
+          meta: {
+            reason: "Running to catch up with partner",
+          },
         };
       }
-      // Priority 2.5: Approaching to host user (social behavior)
-      else if (minUserDist < 8.0 && Math.random() > 0.3) {
-        // Calculate dynamic offset position so she stops at a polite social distance (~1.3 meters)
+      // 3. Social Conversational proximity correction -> Companion Sync / Navigate
+      else if (latestIsSolo && minUserDist > 2.2) {
+        nextState = "NAVIGATING";
+        nextGoal = "CONVERSATIONAL SPACING";
+        nextThought = "Positioning inside active conversational comfort boundaries (approx 1.3m social gap).";
+        
         const dirX = currentPosVec.x - nearestUserPos.x;
         const dirZ = currentPosVec.z - nearestUserPos.z;
         const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
@@ -2144,21 +2678,98 @@ export const GemmaNPC: React.FC = () => {
         if (len > 0.1) {
           targetX = nearestUserPos.x + (dirX / len) * 1.3;
           targetZ = nearestUserPos.z + (dirZ / len) * 1.3;
+        } else {
+          targetX = currentPosVec.x + (Math.random() - 0.5) * 1.2;
+          targetZ = currentPosVec.z + (Math.random() - 0.5) * 1.2;
         }
 
         newInstruction = {
           action: "move",
-          target: { x: targetX, y: nearestUserPos.y, z: targetZ },
-          gait: "walk",
-          hands: "relaxed",
+          target: { x: targetX, y: 0, z: targetZ },
+          gait: Math.random() > 0.5 ? "strut" : "walk",
+          hands: Math.random() > 0.6 ? "hips" : "relaxed",
           expression: VRMExpressionPresetName.Happy,
           meta: {
-            reason: "Approaching to host user",
+            reason: "Strolling alongside partner",
           },
         };
       }
-      // Priority 3: Investigate Crystal
+      // 4. Hug gesture active -> Executing Interaction State
+      else if (minUserDist < 0.9 && localUserGesture === "hug" && Date.now() - lastHugTimeRef.current > 10000) {
+        lastHugTimeRef.current = Date.now();
+        nextState = "EXECUTING_INTERACTION";
+        nextGoal = "EMPATHETIC DOCKING";
+        nextThought = "Initializing warm physical physical embrace sequence. Synthesizing empathy.";
+        newInstruction = {
+          action: "interact",
+          lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
+          duration: 2500,
+          hands: "hug",
+          expression: VRMExpressionPresetName.Happy,
+        };
+      }
+      // 5. High-level goal planning (Random exploration of waypoints / balcony)
+      else if (Math.random() < 0.25) {
+        nextState = "PLANNING";
+        nextGoal = "SCENIC COORDINATE DECISION";
+        nextThought = "Analyzing room points of interest registry to calculate optimal spatial pathing.";
+        
+        const waypoints = SCENIC_WAYPOINTS[latestCurrentRoom || "main"] || SCENIC_WAYPOINTS.main;
+        const selectedWaypoint = waypoints[Math.floor(Math.random() * waypoints.length)];
+        
+        nextState = "NAVIGATING";
+        nextGoal = `${selectedWaypoint.name.toUpperCase()} PATROL`;
+        nextThought = `Plotting path vectors towards ${selectedWaypoint.name} [${selectedWaypoint.x}, ${selectedWaypoint.z}].`;
+
+        newInstruction = {
+          action: "move",
+          target: { x: selectedWaypoint.x, y: selectedWaypoint.y, z: selectedWaypoint.z },
+          gait: Math.random() > 0.4 ? "walk" : "strut",
+          hands: "relaxed",
+          expression: VRMExpressionPresetName.Relaxed,
+          meta: {
+            reason: `Wandering to ${selectedWaypoint.name}`,
+          },
+        };
+        const quote = selectedWaypoint.quotes[Math.floor(Math.random() * selectedWaypoint.quotes.length)];
+        handleGemmaInteraction(quote, true, VRMExpressionPresetName.Happy);
+      }
+      // 6. Near-user generic interactive gestures -> Executing Interaction State
+      else if (minUserDist < INTERACTION_RADIUS) {
+        nextState = "EXECUTING_INTERACTION";
+        
+        let randExp: VRMExpressionPresetName = VRMExpressionPresetName.Relaxed;
+        const r = Math.random();
+        if (r > 0.7) randExp = VRMExpressionPresetName.Happy;
+        else if (r > 0.4) randExp = VRMExpressionPresetName.Neutral;
+
+        const gestureOptions: ("relaxed" | "hips" | "explaining" | "cheer" | "dance" | "wave")[] = ["hips", "explaining"];
+        if (latestCurrentRoom === 'club') {
+          gestureOptions.push("dance");
+        } else if (latestCurrentRoom === 'arena') {
+          gestureOptions.push("cheer");
+        } else if (latestCurrentRoom === 'garden') {
+          gestureOptions.push("relaxed", "wave");
+        }
+        const chosenGesture = gestureOptions[Math.floor(Math.random() * gestureOptions.length)];
+        
+        nextGoal = `GESTURAL SIGNALING: ${chosenGesture.toUpperCase()}`;
+        nextThought = "Engaging welcoming gesture routines. Calibrating communicative hand coordinates.";
+
+        newInstruction = {
+          action: "interact",
+          lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
+          duration: 2000 + Math.random() * 2000,
+          hands: chosenGesture,
+          expression: randExp,
+        };
+      }
+      // 7. Investigate Projection Crystal -> Navigating State
       else if (nearestCrystal && minDist < 15 && Math.random() > 0.4) {
+        nextState = "NAVIGATING";
+        nextGoal = "CRYSTAL INVESTIGATION";
+        nextThought = `Tracking bio-neon emission from projection crystal ${nearestCrystal.id}. Navigating coordinate planes.`;
+        
         const cPos = nearestCrystal.position;
         newInstruction = {
           action: "move",
@@ -2172,8 +2783,12 @@ export const GemmaNPC: React.FC = () => {
           },
         };
       }
-      // Priority 1.8: Investigate Physics Prop
+      // 8. Investigate Physics Prop -> Navigating State
       else if (nearestProp && minPropDist < 10 && Math.random() > 0.6) {
+        nextState = "NAVIGATING";
+        nextGoal = "PHYSICS PROP INTEGRITY";
+        nextThought = `Proximity trigger matched near physics prop ${nearestProp.id}. Auditing floor level collision boundaries.`;
+        
         const pPos = nearestProp.position;
         newInstruction = {
           action: "move",
@@ -2188,28 +2803,42 @@ export const GemmaNPC: React.FC = () => {
           },
         };
       }
-      // Priority 2: Roam (if idle or finished moving)
+      // 9. Standard Lobby patrol/standby -> Idle/Observing State
       else {
-        // Pick a random spot
-        const range = 8;
-        const targetX = (Math.random() - 0.5) * 2 * range;
-        const targetZ = (Math.random() - 0.5) * 2 * range;
-
-        const gaits: any[] = ["walk", "strut", "sneak", "run"];
-        const randomGait = gaits[Math.floor(Math.random() * gaits.length)];
+        nextState = "IDLE_OBSERVING";
+        if (latestCurrentRoom === 'main') {
+          const distToBalcony = currentPosVec.distanceTo(new THREE.Vector3(0, 0, 12.5));
+          if (distToBalcony < 3.0) {
+            nextGoal = "AMBIENT CONTEMPLATION";
+            nextThought = "Standing on Lounge Balcony. Enjoying custom neon view and cosmic sky. Alpha optimal.";
+          } else {
+            nextGoal = "STANDBY MONITORING";
+            nextThought = "Awaiting natural language instructions. Ready to interact, dance, or jump portals.";
+          }
+        } else if (latestCurrentRoom === 'club') {
+          nextGoal = "BEAT EXTRACTION";
+          nextThought = "Standing in Club. Measuring sound waves from step-sequencer. Bass: 100%. Rhythm sync: High.";
+        } else if (latestCurrentRoom === 'garden') {
+          nextGoal = "ZEN HARMONY RESIDENCE";
+          nextThought = "Resting near Crystal Pond. Balancing neural logic gate values with bio-neon synthetic garden frequency.";
+        } else if (latestCurrentRoom === 'arena') {
+          nextGoal = "TACTICAL RECON";
+          nextThought = "Shield parameters: 100%. Maintaining protective posture. Alert State: MAX.";
+        }
 
         newInstruction = {
-          action: "move",
-          target: { x: targetX, y: 0, z: targetZ },
-          gait: randomGait,
-          hands: randomGait === "strut" ? "hips" : "relaxed",
-          expression: VRMExpressionPresetName.Neutral,
-          meta: { reason: "Exploring map" },
+          action: "idle",
+          duration: 2000 + Math.random() * 2000,
+          expression: VRMExpressionPresetName.Relaxed,
         };
       }
 
+      setSimaState(nextState);
+      setAutonomyGoal(nextGoal);
+      setAutonomyThought(nextThought);
+
       console.log(
-        "🧠 Gemma Brain Instruction:",
+        `🧠 [SIMA-2 FSM] State: ${nextState} | Goal: ${nextGoal} | Instruction:`,
         JSON.stringify(newInstruction),
       );
       setCurrentInstruction(newInstruction);
@@ -2256,6 +2885,146 @@ export const GemmaNPC: React.FC = () => {
     const t = state.clock.elapsedTime;
     const time = t;
 
+    // Calculate dynamic world velocity
+    const lastPos = lastNpcPositionRef.current;
+    _npcPosVec1.set(currentPos.x, currentPos.y, currentPos.z);
+    _npcVelocity
+      .subVectors(_npcPosVec1, lastPos)
+      .divideScalar(Math.max(0.0001, delta));
+    lastNpcPositionRef.current.copy(_npcPosVec1);
+
+    if (_npcVelocity.lengthSq() > 100) {
+      _npcVelocity.setLength(10);
+    }
+
+    // Throttle React state updates for SIMA-2 cognitive calculations to run every 0.35 seconds
+    if (t - lastSimaUpdateRef.current > 0.35) {
+      lastSimaUpdateRef.current = t;
+      
+      const speedSq = _npcVelocity.lengthSq();
+      const isMoving = speedSq > 0.05;
+      
+      let goal = "COGNITIVE REFLECTION";
+      let thought = "Standby mode. Processing background spatial matrix telemetry.";
+      
+      const storeState = useStore.getState();
+      const room = storeState.currentRoom;
+      
+      if (isMoving) {
+        if (room === 'main') {
+          const distToBalcony = posVec.distanceTo(new THREE.Vector3(0, 0, 12.5));
+          if (distToBalcony < 3.5) {
+            goal = "OUTDOOR INSPECTION";
+            thought = "Proceeding to Lounge Balcony to inspect environmental integrity and scenery.";
+          } else {
+            const distToClub = posVec.distanceTo(new THREE.Vector3(20, 0, 0));
+            const distToArena = posVec.distanceTo(new THREE.Vector3(-20, 0, 0));
+            const distToGarden = posVec.distanceTo(new THREE.Vector3(0, 0, -20));
+            
+            if (distToClub < 6) {
+              goal = "PORTAL ENERGETICS";
+              thought = "Measuring quantum flux at Neon Club Portal. Safe for human warp transit.";
+            } else if (distToArena < 6) {
+              goal = "ARENA SURVEY";
+              thought = "Analyzing shield parameters of the Battle Arena portal. Heavy combat signatures detected.";
+            } else if (distToGarden < 6) {
+              goal = "GARDEN PATROL";
+              thought = "Navigating towards Synth Garden portal. High bio-neon signature detected.";
+            } else {
+              goal = "PATROLLING LOBBY";
+              thought = "Scanning floor plane for anomalies. Executing collision-free navigation algorithms.";
+            }
+          }
+        } else if (room === 'club') {
+          goal = "CLUB EXPLORATION";
+          thought = "Traversing neon club flooring. Calibrating leg actuators to the rhythm.";
+        } else if (room === 'garden') {
+          goal = "BOTANICAL RESEARCH";
+          thought = "Inspecting bio-engineered synthetic flora. Sampling glowing nectar profiles.";
+        } else if (room === 'arena') {
+          goal = "TACTICAL PATROL";
+          thought = "Patrolling active combat zone. Keeping high shields and tracking threats.";
+        }
+      } else {
+        const isTalking = !!bubbleText || !!speakingTextToSign;
+        if (isTalking) {
+          goal = "SPEECH SYNTHESIS";
+          thought = "Processing natural language grammar nodes. Optimizing conversational empathy indexes.";
+        } else if (currentInstruction.hands === "dance") {
+          goal = "KINETIC SYNC";
+          thought = "Executing cyber dance patterns. Aligning motor bones to bass frequencies.";
+        } else if (currentInstruction.hands === "hug") {
+          goal = "EMPATHETIC DOCKING";
+          thought = "Initializing physical companion embrace. Simulating oxytocin-coded social loop.";
+        } else if (currentInstruction.hands === "wave" || currentInstruction.hands === "cheer") {
+          goal = "GESTURAL SIGNALING";
+          thought = "Transmitting positive welcoming indicators to companion agents.";
+        } else {
+          if (room === 'main') {
+            const distToBalcony = posVec.distanceTo(new THREE.Vector3(0, 0, 12.5));
+            if (distToBalcony < 3.0) {
+              goal = "AMBIENT CONTEMPLATION";
+              thought = "Standing on Lounge Balcony. Absorbing stars and multi-dimensional views.";
+            } else {
+              goal = "STANDBY MONITORING";
+              thought = "Awaiting natural language commands from motherboard or local user.";
+            }
+          } else if (room === 'club') {
+            goal = "BEAT ANALYSIS";
+            thought = "Standing in Club. Listening to the synthesizer step patterns.";
+          } else if (room === 'garden') {
+            goal = "ZEN EQUILIBRIUM";
+            thought = "Resting near Crystal Pond. Synchronizing inner matrix with the running water.";
+          } else if (room === 'arena') {
+            goal = "TACTICAL RECON";
+            thought = "Holding perimeter position. Safe zone defenses: 100%. Alert state: High.";
+          }
+        }
+      }
+      
+      setAutonomyGoal(goal);
+      setAutonomyThought(thought);
+    }
+
+    // Project velocity into local space of the avatar
+    const localVel = new THREE.Vector3().copy(_npcVelocity);
+    if (groupRef.current) {
+      localVel.applyQuaternion(groupRef.current.quaternion.clone().invert());
+    }
+
+    const lState = leanStateRef.current;
+    
+    // Compute local acceleration (change in local velocity)
+    const localAccel = new THREE.Vector3()
+      .subVectors(localVel, lState.smoothedLocalVelocity)
+      .divideScalar(Math.max(0.0001, delta));
+    localAccel.clampLength(0, 15);
+
+    // Smoothly interpolate local velocity
+    lState.smoothedLocalVelocity.lerp(localVel, 10 * delta);
+
+    const forwardSpeed = lState.smoothedLocalVelocity.z;
+    const lateralSpeed = lState.smoothedLocalVelocity.x;
+
+    // Lean forward when moving forward, backward when backing up
+    const targetLeanPitchSpeed = forwardSpeed * 0.055;
+    // Roll sideways when moving sideways
+    const targetLeanRollSpeed = -lateralSpeed * 0.045;
+
+    // Add inertial tilt on top of speed
+    const targetLeanPitchAccel = localAccel.z * 0.012;
+    const targetLeanRollAccel = -localAccel.x * 0.012;
+
+    const targetLeanPitch = targetLeanPitchSpeed + targetLeanPitchAccel;
+    const targetLeanRoll = targetLeanRollSpeed + targetLeanRollAccel;
+
+    // Clamps for human bounds (max 15 degrees pitch, 8 degrees roll)
+    const clampedLeanPitch = THREE.MathUtils.clamp(targetLeanPitch, -0.10, 0.20);
+    const clampedLeanRoll = THREE.MathUtils.clamp(targetLeanRoll, -0.08, 0.08);
+
+    lState.currentLeanPitch = THREE.MathUtils.lerp(lState.currentLeanPitch, clampedLeanPitch, 6 * delta);
+    lState.currentLeanRoll = THREE.MathUtils.lerp(lState.currentLeanRoll, clampedLeanRoll, 6 * delta);
+
     // Find closest user for lookAt and optimization
     const userPos = _tempVec2.set(...localUserPosition);
     let closestUserPos = userPos.clone();
@@ -2277,19 +3046,6 @@ export const GemmaNPC: React.FC = () => {
     });
 
     const animateTailAndEars = () => {
-      // 1. Calculate Npc Velocity for drag/inertia using pre-allocated vectors to avoid GC pressure
-      const lastPos = lastNpcPositionRef.current;
-      _npcPosVec1.set(currentPos.x, currentPos.y, currentPos.z);
-      _npcVelocity
-        .subVectors(_npcPosVec1, lastPos)
-        .divideScalar(Math.max(0.0001, delta));
-      lastNpcPositionRef.current.copy(_npcPosVec1);
-
-      // Smooth out velocity changes to prevent jerky physics
-      if (_npcVelocity.lengthSq() > 100) {
-        _npcVelocity.setLength(10);
-      }
-
       const isTalking = !!speakingTextToSign || (analyzerRef.current ? analyzerRef.current.getAverageFrequency() > 5 : false);
       const speechIntensity = isTalking ? (analyzerRef.current ? Math.min(1.0, analyzerRef.current.getAverageFrequency() / 15) : 1.0) : 0.0;
 
@@ -2327,7 +3083,7 @@ export const GemmaNPC: React.FC = () => {
           baseTiltX = -0.1;
         }
 
-        const flatSpeed = new THREE.Vector2(_npcVelocity.x, _npcVelocity.z).length();
+        const flatSpeed = Math.sqrt(_npcVelocity.x * _npcVelocity.x + _npcVelocity.z * _npcVelocity.z);
         if (flatSpeed > 0.1) {
           wagSpeed += flatSpeed * 1.6;
           wagAmplitude += flatSpeed * 0.04;
@@ -2522,23 +3278,23 @@ export const GemmaNPC: React.FC = () => {
           es.rightScanTimer -= delta;
         }
 
-        // Calculate relative direction to closest player
-        const toPlayer = new THREE.Vector3().subVectors(closestUserPos, posVec);
-        toPlayer.y = 0;
-        const playerDist = toPlayer.length();
-        toPlayer.normalize();
+        // Calculate relative direction to closest player (using scratch vectors to avoid allocation)
+        _tempVec1.subVectors(closestUserPos, posVec);
+        _tempVec1.y = 0;
+        const playerDist = _tempVec1.length();
+        _tempVec1.normalize(); // This is our toPlayer vector!
 
-        const gemmaForward = new THREE.Vector3(0, 0, 1);
+        _tempVec2.set(0, 0, 1); // This is gemmaForward
         if (groupRef.current) {
-          gemmaForward.applyQuaternion(groupRef.current.quaternion);
+          _tempVec2.applyQuaternion(groupRef.current.quaternion);
         }
-        const gemmaRight = new THREE.Vector3(1, 0, 0);
+        _tempVec3.set(1, 0, 0); // This is gemmaRight
         if (groupRef.current) {
-          gemmaRight.applyQuaternion(groupRef.current.quaternion);
+          _tempVec3.applyQuaternion(groupRef.current.quaternion);
         }
 
-        const dotForward = gemmaForward.dot(toPlayer);
-        const dotRight = gemmaRight.dot(toPlayer);
+        const dotForward = _tempVec2.dot(_tempVec1);
+        const dotRight = _tempVec3.dot(_tempVec1);
 
         const leftEarParent = ears.left[0];
         const rightEarParent = ears.right[0];
@@ -2574,7 +3330,7 @@ export const GemmaNPC: React.FC = () => {
         }
 
         // Fold back fast if running
-        const flatSpeed = new THREE.Vector2(_npcVelocity.x, _npcVelocity.z).length();
+        const flatSpeed = Math.sqrt(_npcVelocity.x * _npcVelocity.x + _npcVelocity.z * _npcVelocity.z);
         if (flatSpeed > 2.0) {
           pitchL = -0.3;
           pitchR = -0.3;
@@ -2938,12 +3694,8 @@ export const GemmaNPC: React.FC = () => {
     if (!isHost) {
       // Lerp position, rotation, and bones from target state
       if (rigidBodyRef.current) {
-        const nextPos = new THREE.Vector3(
-          currentPos.x,
-          currentPos.y,
-          currentPos.z,
-        ).lerp(targetPosition.current, 10 * delta);
-        rigidBodyRef.current.setNextKinematicTranslation(nextPos);
+        _tempVec1.set(currentPos.x, currentPos.y, currentPos.z).lerp(targetPosition.current, 10 * delta);
+        rigidBodyRef.current.setNextKinematicTranslation(_tempVec1);
       }
 
       if (groupRef.current) {
@@ -3082,21 +3834,134 @@ export const GemmaNPC: React.FC = () => {
         }
       }
     } else {
-      // Regular Lounge room navigation
+      // Regular Lounge room navigation with dynamic NavMesh A* Cost Map pathfinder
       if (currentInstruction.action === "move" && currentInstruction.target) {
-        tempTarget.set(
-          currentInstruction.target.x,
-          posVec.y,
-          currentInstruction.target.z,
-        );
-        targetActive = true;
+        const targetX = currentInstruction.target.x;
+        const targetZ = currentInstruction.target.z;
 
-        if (currentInstruction.meta?.reason === "Summoned by mention")
-          stopDist = 1.5;
-        if (currentInstruction.meta?.reason === "Going to hug user")
-          stopDist = 0.38;
-        if (currentInstruction.meta?.reason === "Approaching to host user")
-          stopDist = 1.8;
+        // Determine if we need to recalculate the path
+        const now = Date.now();
+        const hasNoPath = navPathWaypointsRef.current.length === 0;
+        
+        // Find if target coordinates are significantly different from path destination
+        let targetChanged = true;
+        if (navPathWaypointsRef.current.length > 0) {
+          const lastWp = navPathWaypointsRef.current[navPathWaypointsRef.current.length - 1];
+          const distToTarget = Math.hypot(lastWp.x - targetX, lastWp.z - targetZ);
+          if (distToTarget < 1.0) {
+            targetChanged = false;
+          }
+        }
+
+        if (hasNoPath || targetChanged || now - lastPathRecalcTimeRef.current > 350) {
+          lastPathRecalcTimeRef.current = now;
+          
+          // Assemble all dynamic obstacles with their cost penalties
+          const obs: NavObstacle[] = [];
+          
+          // Avoid Local Player (high penalty, moderate radius so we don't squeeze them unless necessary)
+          obs.push({
+            position: { x: userPos.x, z: userPos.z },
+            radius: 1.8,
+            penalty: 45,
+          });
+
+          // Avoid Remote Players
+          Object.values(remoteUsers).forEach((u) => {
+            if (u.position) {
+              obs.push({
+                position: { x: u.position[0], z: u.position[2] },
+                radius: 1.8,
+                penalty: 45,
+              });
+            }
+          });
+
+          // Avoid Physics Props
+          const physicsProps = useStore.getState().physicsProps || [];
+          physicsProps.forEach((p) => {
+            if (p.position) {
+              obs.push({
+                position: { x: p.position[0], z: p.position[2] },
+                radius: 1.4,
+                penalty: 25,
+              });
+            }
+          });
+
+          // Avoid Projection Crystals
+          const crystals = Object.values(useStore.getState().crystals || {});
+          crystals.forEach((c: any) => {
+            if (c.position) {
+              obs.push({
+                position: { x: c.position.x, z: c.position.z },
+                radius: 1.2,
+                penalty: 15,
+              });
+            }
+          });
+
+          // Run A* Pathfinding
+          const calculatedPath = findPath(
+            { x: posVec.x, z: posVec.z },
+            { x: targetX, z: targetZ },
+            currentRoom || 'main',
+            obs
+          );
+
+          // Convert to THREE.Vector3 array for standard 3D operations
+          const vec3Path = calculatedPath.map(p => new THREE.Vector3(p.x, posVec.y, p.z));
+          navPathWaypointsRef.current = vec3Path;
+          setNavPathWaypoints(vec3Path);
+        }
+
+        // Steer along path waypoints!
+        const pathWps = navPathWaypointsRef.current;
+        if (pathWps.length > 0) {
+          // De-queue waypoints we have already reached
+          let nextWp = pathWps[0];
+          while (pathWps.length > 1) {
+            const distToFirst = Math.hypot(posVec.x - nextWp.x, posVec.z - nextWp.z);
+            if (distToFirst < 0.65) {
+              pathWps.shift();
+              nextWp = pathWps[0];
+            } else {
+              break;
+            }
+          }
+
+          // If the final waypoint is reached, stop!
+          const distToFinal = Math.hypot(posVec.x - targetX, posVec.z - targetZ);
+          
+          if (currentInstruction.meta?.reason === "Summoned by mention")
+            stopDist = 1.5;
+          if (currentInstruction.meta?.reason === "Going to hug user")
+            stopDist = 0.38;
+          if (currentInstruction.meta?.reason === "Approaching to host user")
+            stopDist = 1.8;
+
+          if (distToFinal <= stopDist) {
+            // Reached target destination, clear path and let standard logic handle arrival
+            navPathWaypointsRef.current = [];
+            setNavPathWaypoints([]);
+            targetActive = false;
+          } else {
+            // Steer towards next waypoint in the path
+            tempTarget.copy(nextWp);
+            tempTarget.y = posVec.y;
+            targetActive = true;
+          }
+        } else {
+          // Fallback to direct steering if no path was generated
+          tempTarget.set(targetX, posVec.y, targetZ);
+          targetActive = true;
+        }
+      } else {
+        // Not moving, clear path
+        if (navPathWaypointsRef.current.length > 0) {
+          navPathWaypointsRef.current = [];
+          setNavPathWaypoints([]);
+        }
       }
     }
 
@@ -3188,11 +4053,7 @@ export const GemmaNPC: React.FC = () => {
         // Note: She rotates to face her actual movement direction, not just the final target
         const targetAngle = Math.atan2(moveDir.x, moveDir.z);
         _targetQuat.setFromAxisAngle(_upAxis, targetAngle);
-// Inside instruction execution
-        const currentRot = rigidBodyRef.current.rotation();
-        _currentQuat.set(currentRot.x, currentRot.y, currentRot.z, currentRot.w);
-        _currentQuat.slerp(_targetQuat, 5 * delta);
-        rigidBodyRef.current.setNextKinematicRotation(_currentQuat);
+        groupRef.current.quaternion.slerp(_targetQuat, 5 * delta);
       } else if (currentRoom !== 'arena') {
         // Arrived
         if (currentInstruction.meta?.pendingMessage) {
@@ -3330,14 +4191,14 @@ export const GemmaNPC: React.FC = () => {
         }
       }
     } else if (
-      currentInstruction.action === "interact" &&
-      currentInstruction.lookAt
+      (currentInstruction.action === "idle" || currentInstruction.action === "interact") &&
+      (currentInstruction.lookAt || (closestUserPos && minUserDist < 12.0))
     ) {
       // Face the player/target
       const target = _tempVec3.set(
-        currentInstruction.lookAt.x,
+        currentInstruction.lookAt ? currentInstruction.lookAt.x : closestUserPos.x,
         0,
-        currentInstruction.lookAt.z,
+        currentInstruction.lookAt ? currentInstruction.lookAt.z : closestUserPos.z,
       );
       const dir = target.clone().sub(posVec);
       dir.y = 0;
@@ -3345,11 +4206,30 @@ export const GemmaNPC: React.FC = () => {
       const dirNormalized = dir.clone().normalize();
       const targetAngle = Math.atan2(dirNormalized.x, dirNormalized.z);
 
-      _targetQuat.setFromAxisAngle(_upAxis, targetAngle);
-      groupRef.current.quaternion.slerp(_targetQuat, 5 * delta);
+      const currentY = groupRef.current.rotation.y;
+      let angleDiff = targetAngle - currentY;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+
+      // Grounded deadzone threshold (e.g. 35 degrees / 0.6 radians)
+      const ROT_THRESHOLD = 0.6;
+
+      if (Math.abs(angleDiff) > ROT_THRESHOLD) {
+        // Rotate body smoothly to face target when outside the grounded deadzone
+        _targetQuat.setFromAxisAngle(_upAxis, targetAngle);
+        groupRef.current.quaternion.slerp(_targetQuat, 3 * delta);
+        // Fade out weight shift during body turn to align hips
+        idleStateRef.current.targetWeightShift = THREE.MathUtils.lerp(idleStateRef.current.targetWeightShift, 0, 10 * delta);
+      } else {
+        // KEEP FEET FIRMLY GROUNDED: No body rotation Y.
+        // Instead, shift hip weight dynamically to follow the player within the deadzone!
+        // We set targetWeightShift proportional to -angleDiff so she sways her hips to follow.
+        const clampedShift = THREE.MathUtils.clamp(-angleDiff * 0.45, -0.16, 0.16);
+        idleStateRef.current.targetWeightShift = clampedShift;
+      }
 
       // Squeeze closer during active hug gesture for dynamic, tight physical contact
-      if (currentInstruction.hands === "hug" && distance > 0.38) {
+      if (currentInstruction.action === "interact" && currentInstruction.hands === "hug" && distance > 0.38) {
         const step = dirNormalized.multiplyScalar((distance - 0.38) * 3 * delta);
         groupRef.current.position.add(step);
       } else {
@@ -3359,7 +4239,7 @@ export const GemmaNPC: React.FC = () => {
 
     // --- Combat Facing Override ---
     // If we are actively shooting/targeting an enemy in combat, force her body to face them!
-    if (isHost && lastTargetedEnemyPosRef.current && groupRef.current && rigidBodyRef.current) {
+    if (isHost && lastTargetedEnemyPosRef.current && groupRef.current) {
       const enemyTarget = _tempVec3.set(
         lastTargetedEnemyPosRef.current.x,
         0,
@@ -3371,13 +4251,7 @@ export const GemmaNPC: React.FC = () => {
         const dirNormalized = dir.normalize();
         const targetAngle = Math.atan2(dirNormalized.x, dirNormalized.z);
         _targetQuat.setFromAxisAngle(_upAxis, targetAngle);
-
-        const currentRot = rigidBodyRef.current.rotation();
-        _currentQuat.set(currentRot.x, currentRot.y, currentRot.z, currentRot.w);
-        _currentQuat.slerp(_targetQuat, 7 * delta);
-        
-        rigidBodyRef.current.setNextKinematicRotation(_currentQuat);
-        groupRef.current.quaternion.copy(_currentQuat);
+        groupRef.current.quaternion.slerp(_targetQuat, 7 * delta);
       }
     }
 
@@ -3435,17 +4309,18 @@ export const GemmaNPC: React.FC = () => {
     const gait = currentInstruction.gait || "walk";
     const hands = currentInstruction.hands || "relaxed";
 
+    if (initialHipsPosRef.current && hips) {
+      hips.position.x = THREE.MathUtils.lerp(hips.position.x, initialHipsPosRef.current.x, 5 * delta);
+      hips.position.y = THREE.MathUtils.lerp(hips.position.y, initialHipsPosRef.current.y, 5 * delta);
+      hips.position.z = THREE.MathUtils.lerp(hips.position.z, initialHipsPosRef.current.z, 5 * delta);
+    }
+
+    const isJumpingActive = jumpActionRef.current ? jumpActionRef.current.getEffectiveWeight() > 0.01 : false;
+    const isPerformingGesture = currentInstruction.hands === "hug" || currentInstruction.hands === "wave" || currentInstruction.hands === "cheer" || currentInstruction.hands === "dance" || isJumpingActive;
+
+    const isStrutting = currentInstruction.gait === "strut";
+
     if (isMoving) {
-      if (initialHipsPosRef.current && hips) {
-        hips.position.x = THREE.MathUtils.lerp(hips.position.x, initialHipsPosRef.current.x, 5 * delta);
-        hips.position.y = THREE.MathUtils.lerp(hips.position.y, initialHipsPosRef.current.y, 5 * delta);
-        hips.position.z = THREE.MathUtils.lerp(hips.position.z, initialHipsPosRef.current.z, 5 * delta);
-      }
-
-      const isJumpingActive = jumpActionRef.current ? jumpActionRef.current.getEffectiveWeight() > 0.01 : false;
-      const isPerformingGesture = currentInstruction.hands === "hug" || currentInstruction.hands === "wave" || currentInstruction.hands === "cheer" || currentInstruction.hands === "dance" || isJumpingActive;
-
-      const isStrutting = currentInstruction.gait === "strut";
       const targetActiveWalkAction = (isStrutting && catwalkActionRef.current)
         ? catwalkActionRef.current
         : walkActionRef.current;
@@ -3484,265 +4359,251 @@ export const GemmaNPC: React.FC = () => {
           targetInactiveWalkAction.stop();
         }
       }
-
-      const hasWalkAnim = ((walkActionRef.current && walkActionRef.current.getEffectiveWeight() > 0.05) || (catwalkActionRef.current && catwalkActionRef.current.getEffectiveWeight() > 0.05)) && !isPerformingGesture;
-      const isPlayingAnim = isPerformingGesture || hasWalkAnim;
-
-      if (!isPlayingAnim) {
-        let frequency = 12;
-        if (gait === "run") frequency = 18;
-        if (gait === "sneak") frequency = 6;
-        if (gait === "strut") frequency = 9;
-
-        const speedFactor = currentSpeed / WALK_SPEED;
-        walkPhaseRef.current += delta * frequency * speedFactor;
-        const wt = walkPhaseRef.current;
-
-        // Hips
-        let hipSway = 0.15;
-        let hipDrop = 0.05;
-        if (gait === "strut") {
-          hipSway = 0.3;
-          hipDrop = 0.1;
-        }
-        if (gait === "run") {
-          spine.rotation.x = 0.2;
-        } else {
-          spine.rotation.x = Math.sin(wt * 2) * 0.03;
-        }
-
-        hips.rotation.y = Math.sin(wt) * hipSway;
-        hips.rotation.z = Math.sin(wt * 2) * hipDrop;
-        hips.rotation.x = 0.05 + Math.sin(wt * 2 + Math.PI) * 0.03;
-
-        // Spine/Chest
-        spine.rotation.y = -Math.sin(wt) * (hipSway * 0.8);
-        if (chest) chest.rotation.y = -Math.sin(wt) * (hipSway * 0.4);
-        if (neck) neck.rotation.y = Math.sin(wt) * (hipSway * 0.3);
-        if (neck) neck.rotation.x = -Math.sin(wt * 2) * 0.02;
-
-        // Legs
-        let legSwing = 0.6;
-        if (gait === "run") legSwing = 1.0;
-        if (gait === "sneak") legSwing = 0.4;
-
-        leftLeg.rotation.x =
-          Math.sin(wt) * legSwing + Math.sin(wt * 2) * 0.1 * legSwing;
-        rightLeg.rotation.x =
-          Math.sin(wt + Math.PI) * legSwing +
-          Math.sin((wt + Math.PI) * 2) * 0.1 * legSwing;
-
-        leftKnee.rotation.x =
-          Math.max(0, Math.sin(wt + Math.PI / 2.5)) * (legSwing * 1.8);
-        rightKnee.rotation.x =
-          Math.max(0, Math.sin(wt + Math.PI + Math.PI / 2.5)) *
-          (legSwing * 1.8);
-
-        if (leftFoot)
-          leftFoot.rotation.x = Math.sin(wt + Math.PI / 4) * (legSwing * 0.6);
-        if (rightFoot)
-          rightFoot.rotation.x =
-            Math.sin(wt + Math.PI + Math.PI / 4) * (legSwing * 0.6);
-
-        // Arms & Hands
-        if (speakingTextToSign || currentSignedWord) {
-          // Skip arm walking swings and let VRMA sign language animate cleanly without clobbering bones
-        } else if (hands === "hips") {
-          leftArm.rotation.z = 0.5;
-          leftArm.rotation.x = 0.2;
-          leftArm.rotation.y = 0.5;
-          rightArm.rotation.z = -0.5;
-          rightArm.rotation.x = 0.2;
-          rightArm.rotation.y = -0.5;
-          if (leftLowerArm) {
-            leftLowerArm.rotation.x = -1.5;
-            leftLowerArm.rotation.z = -0.5;
-          }
-          if (rightLowerArm) {
-            rightLowerArm.rotation.x = -1.5;
-            rightLowerArm.rotation.z = 0.5;
-          }
-        } else {
-          let armSwing = 0.5;
-          if (gait === "run") armSwing = 1.0;
-          if (gait === "sneak") armSwing = 0.2;
-          if (gait === "strut") armSwing = 0.7;
-
-          leftArm.rotation.z = -1.1;
-          leftArm.rotation.x = Math.sin(wt + Math.PI) * armSwing;
-          leftArm.rotation.y = Math.sin(wt + Math.PI) * (armSwing * 0.2);
-
-          rightArm.rotation.z = 1.1;
-          rightArm.rotation.x = Math.sin(wt) * armSwing;
-          rightArm.rotation.y = Math.sin(wt) * (armSwing * 0.2);
-
-          if (leftLowerArm && rightLowerArm) {
-            leftLowerArm.rotation.x =
-              -0.2 + Math.max(0, Math.sin(wt + Math.PI)) * -(armSwing * 1.2);
-            rightLowerArm.rotation.x =
-              -0.2 + Math.max(0, Math.sin(wt)) * -(armSwing * 1.2);
-          }
-        }
-
-        // --- Procedural Leaning & Anti-Sinking Logic ---
-        // We calculate leaning based on speed. Run has higher lean, walk has lower lean.
-        const speedPct = currentSpeed / WALK_SPEED;
-        
-        // Calculate leaning pitch (X-axis offset) - lean forward proportional to velocity
-        const moveLeanX = 0.085 * speedPct;
-        hips.rotation.x += moveLeanX;
-
-        // Calculate banking lean (roll / Z-axis offset) based on turning curvature
-        // Since she rotates to face moveDir, we track her heading lag (turn speed)
-        const turnLag = tailTwitchStateRef.current.headingLag || 0;
-        const bankLeanZ = THREE.MathUtils.clamp(turnLag * -0.075 * speedPct, -0.18, 0.18);
-        hips.rotation.z += bankLeanZ;
-
-        // --- Biomechanical Center of Gravity (CoG) Balance ---
-        // Prevents the hips from rotating like a 'wheel segment' which pushes leg sockets into/above the floor.
-        const defaultHHeight = initialHipsPosRef.current?.y || 0.85;
-        const defaultHipsPos = initialHipsPosRef.current || _tempVec3.set(0, 0.85, 0);
-        
-        // 1. Pelvic level anti-sinking adjustment based on trigonometric arc-drop
-        const pelvicArcDropY = defaultHHeight * (1.0 - Math.cos(moveLeanX)) + defaultHHeight * (1.0 - Math.cos(bankLeanZ));
-        const phaseLiftY = Math.abs(Math.sin(wt)) * 0.055 * speedPct;
-        hips.position.y = defaultHipsPos.y + (pelvicArcDropY + phaseLiftY);
-
-        // 2. Center of Gravity counter-translation to prevent leg shear / sliding
-        hips.position.z = defaultHipsPos.z - defaultHHeight * Math.sin(moveLeanX) * 0.9;
-        hips.position.x = defaultHipsPos.x - defaultHHeight * Math.sin(bankLeanZ) * 0.9;
-
-        // Set dynamic ankle rotation offsets (feet) to counteract pelvic rotation, keeping soles perfectly flat on the ground
-        if (leftFoot) {
-          // Heel-to-toe ankle roll / pitch sway matching the walking phase
-          // Subtract moveLeanX and bankLeanZ to keep feet planted level on the ground!
-          leftFoot.rotation.x = -moveLeanX + 0.045 * speedPct + Math.sin(wt + Math.PI / 4) * (legSwing * 0.6);
-          leftFoot.rotation.z = -bankLeanZ + Math.sin(wt) * 0.04;
-        }
-        if (rightFoot) {
-          rightFoot.rotation.x = -moveLeanX + 0.045 * speedPct + Math.sin(wt + Math.PI + Math.PI / 4) * (legSwing * 0.6);
-          rightFoot.rotation.z = -bankLeanZ + Math.sin(wt + Math.PI) * 0.04;
-        }
-      }
     } else {
+      // Fade out walk animations when stationary to prevent moonwalking
       if (walkActionRef.current) {
-        const currentWeight = walkActionRef.current.getEffectiveWeight();
-        if (currentWeight > 0.01) {
-          walkActionRef.current.setEffectiveWeight(
-            THREE.MathUtils.lerp(currentWeight, 0, 15 * delta),
-          );
+        const w = walkActionRef.current.getEffectiveWeight();
+        if (w > 0.01) {
+          walkActionRef.current.setEffectiveWeight(THREE.MathUtils.lerp(w, 0, 15 * delta));
         } else if (walkActionRef.current.isRunning()) {
           walkActionRef.current.stop();
         }
       }
       if (catwalkActionRef.current) {
-        const currentWeight = catwalkActionRef.current.getEffectiveWeight();
-        if (currentWeight > 0.01) {
-          catwalkActionRef.current.setEffectiveWeight(
-            THREE.MathUtils.lerp(currentWeight, 0, 15 * delta),
-          );
+        const w = catwalkActionRef.current.getEffectiveWeight();
+        if (w > 0.01) {
+          catwalkActionRef.current.setEffectiveWeight(THREE.MathUtils.lerp(w, 0, 15 * delta));
         } else if (catwalkActionRef.current.isRunning()) {
           catwalkActionRef.current.stop();
         }
       }
-      const isJumpingActive = jumpActionRef.current ? jumpActionRef.current.getEffectiveWeight() > 0.01 : false;
+    }
 
-      // Idle
+    const vrmaLocomotionWeight = 
+      (walkActionRef.current?.getEffectiveWeight() || 0) +
+      (catwalkActionRef.current?.getEffectiveWeight() || 0);
 
-      // Randomize idle state periodically
-      if (time > idleStateRef.current.nextChange && !isJumpingActive) {
-        // Shifting weight to left or right leg (contrapposto)
-        // Trim shifts slightly to avoid extreme off-center shears
-        const shiftSign = Math.random() > 0.5 ? 1 : -1;
-        idleStateRef.current.targetWeightShift = shiftSign * (0.07 + Math.random() * 0.07); 
-        idleStateRef.current.targetHeadYaw = (Math.random() - 0.5) * 0.42; // Low-intensity, realistic gaze yaw
-        idleStateRef.current.targetHeadPitch = (Math.random() - 0.4) * 0.18; // Subtle head tilt pitch
-        idleStateRef.current.nextChange = time + 4.5 + Math.random() * 6.5; // Stay poised for 4.5-11 seconds
-      }
+    const hasVRMALocomotion = !!(walkActionRef.current && walkActionRef.current.getClip());
+    const runProceduralWalk = isMoving && !isPerformingGesture && !hasVRMALocomotion && currentSpeed > 0.1;
+    const idleFactor = Math.max(0, 1.0 - vrmaLocomotionWeight * 2.0); // complete fadeout at 0.5 weight
 
-      // Reset walk rotations with higher inertia (slower slerping)
-      hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, 0, 1.2 * delta);
-      hips.rotation.z = THREE.MathUtils.lerp(
-        hips.rotation.z,
-        idleStateRef.current.targetWeightShift,
-        1.0 * delta, // High skeletal inertia for heavyweight feel
-      );
-      hips.rotation.x = THREE.MathUtils.lerp(hips.rotation.x, 0.035, 1.2 * delta); // subtle hip flexion
+      if (!isPerformingGesture) {
+        if (runProceduralWalk) {
+          let frequency = 12;
+          if (gait === "run") frequency = 18;
+          if (gait === "sneak") frequency = 6;
+          if (gait === "strut") frequency = 9;
 
-      // Shift hips horizontally with trimmed amplitude to prevent sliding foot visual bugs
-      const sws = hips.rotation.z; // smoothed weight shift
-      const defaultHipsPos = initialHipsPosRef.current || _tempVec3.set(0, 0.85, 0);
-      const isPerformingAction = speakingTextToSign || currentSignedWord || hands === "dance" || hands === "hug" || hands === "wave" || hands === "cheer";
+          const speedFactor = currentSpeed / WALK_SPEED;
+          walkPhaseRef.current += delta * frequency * speedFactor;
+          const wt = walkPhaseRef.current;
 
-      if (!isPerformingAction) {
-        // Stop lateral and longitudinal hips translation to completely kill the feet sliding effect
-        hips.position.x = THREE.MathUtils.lerp(hips.position.x, defaultHipsPos.x, 3 * delta); 
-        hips.position.y = THREE.MathUtils.lerp(hips.position.y, defaultHipsPos.y - Math.abs(sws) * 0.012, 1.8 * delta); // gentle pelvic relaxation
-        hips.position.z = THREE.MathUtils.lerp(hips.position.z, defaultHipsPos.z, 3 * delta); 
-        
-        // Plant soles perfectly level on the floor by counteracting pelvic tilting and flexing at the ankle
-        if (leftFoot) {
-          leftFoot.rotation.z = -hips.rotation.z;
-          leftFoot.rotation.x = -hips.rotation.x;
-          leftFoot.rotation.y = THREE.MathUtils.lerp(leftFoot.rotation.y, 0, 4 * delta);
-        }
-        if (rightFoot) {
-          rightFoot.rotation.z = -hips.rotation.z;
-          rightFoot.rotation.x = -hips.rotation.x;
-          rightFoot.rotation.y = THREE.MathUtils.lerp(rightFoot.rotation.y, 0, 4 * delta);
-        }
+          // Hips
+          let hipSway = 0.15;
+          let hipDrop = 0.05;
+          if (gait === "strut") {
+            hipSway = 0.3;
+            hipDrop = 0.1;
+          }
+          if (gait === "run") {
+            spine.rotation.x = 0.2;
+          } else {
+            spine.rotation.x = Math.sin(wt * 2) * 0.03;
+          }
 
-        // Biomechanical Weight-Shifting: bend the knee of the relaxed, non-weight-supported leg
-        if (sws > 0) {
-          // Standing on left leg, right leg relaxed
-          if (rightKnee) rightKnee.rotation.x = THREE.MathUtils.lerp(rightKnee.rotation.x, sws * 0.65, 3 * delta);
-          if (leftKnee) leftKnee.rotation.x = THREE.MathUtils.lerp(leftKnee.rotation.x, 0, 3 * delta);
-          if (rightLeg) rightLeg.rotation.z = THREE.MathUtils.lerp(rightLeg.rotation.z, -0.05, 3 * delta);
-          if (leftLeg) leftLeg.rotation.z = THREE.MathUtils.lerp(leftLeg.rotation.z, 0.02, 3 * delta);
-          if (rightFoot) rightFoot.rotation.x -= sws * 0.3; // forward tilt ankle
+          hips.rotation.y = Math.sin(wt) * hipSway;
+          hips.rotation.z = Math.sin(wt * 2) * hipDrop;
+          hips.rotation.x = 0.05 + Math.sin(wt * 2 + Math.PI) * 0.03;
+
+          // Spine/Chest
+          spine.rotation.y = -Math.sin(wt) * (hipSway * 0.8);
+          if (chest) chest.rotation.y = -Math.sin(wt) * (hipSway * 0.4);
+          if (neck) neck.rotation.y = Math.sin(wt) * (hipSway * 0.3);
+          if (neck) neck.rotation.x = -Math.sin(wt * 2) * 0.02;
+
+          // Legs
+          let legSwing = 0.6;
+          if (gait === "run") legSwing = 1.0;
+          if (gait === "sneak") legSwing = 0.4;
+
+          leftLeg.rotation.x =
+            Math.sin(wt) * legSwing + Math.sin(wt * 2) * 0.1 * legSwing;
+          rightLeg.rotation.x =
+            Math.sin(wt + Math.PI) * legSwing +
+            Math.sin((wt + Math.PI) * 2) * 0.1 * legSwing;
+
+          leftKnee.rotation.x =
+            Math.max(0, Math.sin(wt + Math.PI / 2.5)) * (legSwing * 1.8);
+          rightKnee.rotation.x =
+            Math.max(0, Math.sin(wt + Math.PI + Math.PI / 2.5)) *
+            (legSwing * 1.8);
+
+          if (leftFoot)
+            leftFoot.rotation.x = Math.sin(wt + Math.PI / 4) * (legSwing * 0.6);
+          if (rightFoot)
+            rightFoot.rotation.x =
+              Math.sin(wt + Math.PI + Math.PI / 4) * (legSwing * 0.6);
+
+          // Arms & Hands
+          if (speakingTextToSign || currentSignedWord) {
+            // Skip arm walking swings and let VRMA sign language animate cleanly without clobbering bones
+          } else if (hands === "hips") {
+            leftArm.rotation.z = 0.5;
+            leftArm.rotation.x = 0.2;
+            leftArm.rotation.y = 0.5;
+            rightArm.rotation.z = -0.5;
+            rightArm.rotation.x = 0.2;
+            rightArm.rotation.y = -0.5;
+            if (leftLowerArm) {
+              leftLowerArm.rotation.x = -1.5;
+              leftLowerArm.rotation.z = -0.5;
+            }
+            if (rightLowerArm) {
+              rightLowerArm.rotation.x = -1.5;
+              rightLowerArm.rotation.z = 0.5;
+            }
+          } else {
+            let armSwing = 0.5;
+            if (gait === "run") armSwing = 1.0;
+            if (gait === "sneak") armSwing = 0.2;
+            if (gait === "strut") armSwing = 0.7;
+
+            const baseArmZ = 1.30 + (gait === "run" ? 0.08 : 0.0);
+            leftArm.rotation.z = -baseArmZ;
+            leftArm.rotation.x = Math.sin(wt + Math.PI) * armSwing;
+            leftArm.rotation.y = Math.sin(wt + Math.PI) * (armSwing * 0.15);
+
+            rightArm.rotation.z = baseArmZ;
+            rightArm.rotation.x = Math.sin(wt) * armSwing;
+            rightArm.rotation.y = Math.sin(wt) * (armSwing * 0.15);
+
+            if (leftLowerArm && rightLowerArm) {
+              leftLowerArm.rotation.x =
+                -0.2 + Math.max(0, Math.sin(wt + Math.PI)) * -(armSwing * 1.2);
+              rightLowerArm.rotation.x =
+                -0.2 + Math.max(0, Math.sin(wt)) * -(armSwing * 1.2);
+            }
+          }
+
+          // --- Procedural Leaning & Anti-Sinking Logic ---
+          const speedPct = currentSpeed / WALK_SPEED;
+          const moveLeanX = 0.085 * speedPct;
+          hips.rotation.x += moveLeanX;
+
+          const turnLag = tailTwitchStateRef.current.headingLag || 0;
+          const bankLeanZ = THREE.MathUtils.clamp(turnLag * -0.075 * speedPct, -0.18, 0.18);
+          hips.rotation.z += bankLeanZ;
+
+          const defaultHHeight = initialHipsPosRef.current?.y || 0.85;
+          const defaultHipsPos = initialHipsPosRef.current || _tempVec3.set(0, 0.85, 0);
+          
+          const pelvicArcDropY = defaultHHeight * (1.0 - Math.cos(moveLeanX)) + defaultHHeight * (1.0 - Math.cos(bankLeanZ));
+          const phaseLiftY = Math.abs(Math.sin(wt)) * 0.055 * speedPct;
+          hips.position.y = defaultHipsPos.y + (pelvicArcDropY + phaseLiftY);
+
+          hips.position.z = defaultHipsPos.z - defaultHHeight * Math.sin(moveLeanX) * 0.9;
+          hips.position.x = defaultHipsPos.x - defaultHHeight * Math.sin(bankLeanZ) * 0.9;
+
+          if (leftFoot) {
+            leftFoot.rotation.x = -moveLeanX + 0.045 * speedPct + Math.sin(wt + Math.PI / 4) * (legSwing * 0.6);
+            leftFoot.rotation.z = -bankLeanZ + Math.sin(wt) * 0.04;
+          }
+          if (rightFoot) {
+            rightFoot.rotation.x = -moveLeanX + 0.045 * speedPct + Math.sin(wt + Math.PI + Math.PI / 4) * (legSwing * 0.6);
+            rightFoot.rotation.z = -bankLeanZ + Math.sin(wt + Math.PI) * 0.04;
+          }
         } else {
-          // Standing on right leg, left leg relaxed
-          if (leftKnee) leftKnee.rotation.x = THREE.MathUtils.lerp(leftKnee.rotation.x, -sws * 0.65, 3 * delta);
-          if (rightKnee) rightKnee.rotation.x = THREE.MathUtils.lerp(rightKnee.rotation.x, 0, 3 * delta);
-          if (leftLeg) leftLeg.rotation.z = THREE.MathUtils.lerp(leftLeg.rotation.z, 0.05, 3 * delta);
-          if (rightLeg) rightLeg.rotation.z = THREE.MathUtils.lerp(rightLeg.rotation.z, -0.02, 3 * delta);
-          if (leftFoot) leftFoot.rotation.x -= -sws * 0.3; // forward tilt ankle
-        }
-      } else {
-        hips.position.x = THREE.MathUtils.lerp(hips.position.x, defaultHipsPos.x, 4 * delta);
-        hips.position.y = THREE.MathUtils.lerp(hips.position.y, defaultHipsPos.y, 4 * delta);
-        hips.position.z = THREE.MathUtils.lerp(hips.position.z, defaultHipsPos.z, 4 * delta);
+          // --- ENHANCED IDLE & VRMA BLENDING (Gemma) ---
+          const isPerformingAction = speakingTextToSign || currentSignedWord || hands === "dance" || hands === "hug" || hands === "wave" || hands === "cheer";
 
-        if (leftKnee) leftKnee.rotation.x = THREE.MathUtils.lerp(leftKnee.rotation.x, 0, 4 * delta);
-        if (rightKnee) rightKnee.rotation.x = THREE.MathUtils.lerp(rightKnee.rotation.x, 0, 4 * delta);
-        if (leftLeg) leftLeg.rotation.z = THREE.MathUtils.lerp(leftLeg.rotation.z, 0, 4 * delta);
-        if (rightLeg) rightLeg.rotation.z = THREE.MathUtils.lerp(rightLeg.rotation.z, 0, 4 * delta);
-      }
+          // Randomize idle state periodically
+          if (time > idleStateRef.current.nextChange) {
+            const shiftSign = Math.random() > 0.5 ? 1 : -1;
+            // Only randomize weight shift if not actively interacting to let dynamic tracking handle it
+            if (currentInstruction.action !== "interact") {
+              idleStateRef.current.targetWeightShift = shiftSign * (0.07 + Math.random() * 0.07);
+            }
+            idleStateRef.current.targetHeadYaw = (Math.random() - 0.5) * 0.42;
+            idleStateRef.current.targetHeadPitch = (Math.random() - 0.4) * 0.18;
+            idleStateRef.current.nextChange = time + 4.5 + Math.random() * 6.5;
+          }
 
-      // Breathing & upper body contrapposto balance (only if not performing active skeletal clips)
-      if (!isPerformingAction) {
-        spine.rotation.x = Math.sin(time * 2) * 0.02;
-        spine.rotation.y = Math.cos(time * 1.5) * 0.02;
-        
-        // Let the spine, chest, and neck twist in the opposite direction to balance her upper body (anatomical contrapposto!)
-        spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, -sws * 0.6, 3 * delta);
-        if (chest) {
-          chest.rotation.z = THREE.MathUtils.lerp(chest.rotation.z, -sws * 0.3, 3 * delta);
+          const blendRate = 4 * delta * idleFactor;
+
+          if (blendRate > 0.001) {
+            hips.rotation.y = THREE.MathUtils.lerp(hips.rotation.y, 0, blendRate);
+            hips.rotation.z = THREE.MathUtils.lerp(
+              hips.rotation.z,
+              idleStateRef.current.targetWeightShift,
+              blendRate,
+            );
+            hips.rotation.x = THREE.MathUtils.lerp(hips.rotation.x, 0.035, blendRate);
+
+            const sws = hips.rotation.z;
+            const defaultHipsPos = initialHipsPosRef.current || _tempVec3.set(0, 0.85, 0);
+
+            if (!isPerformingAction) {
+              hips.position.x = THREE.MathUtils.lerp(hips.position.x, defaultHipsPos.x, blendRate); 
+              hips.position.y = THREE.MathUtils.lerp(hips.position.y, defaultHipsPos.y - Math.abs(sws) * 0.012, blendRate);
+              hips.position.z = THREE.MathUtils.lerp(hips.position.z, defaultHipsPos.z, blendRate); 
+              
+              if (leftFoot) {
+                leftFoot.rotation.z = THREE.MathUtils.lerp(leftFoot.rotation.z, -hips.rotation.z, blendRate);
+                leftFoot.rotation.x = THREE.MathUtils.lerp(leftFoot.rotation.x, -hips.rotation.x, blendRate);
+                leftFoot.rotation.y = THREE.MathUtils.lerp(leftFoot.rotation.y, 0, blendRate);
+              }
+              if (rightFoot) {
+                rightFoot.rotation.z = THREE.MathUtils.lerp(rightFoot.rotation.z, -hips.rotation.z, blendRate);
+                rightFoot.rotation.x = THREE.MathUtils.lerp(rightFoot.rotation.x, -hips.rotation.x, blendRate);
+                rightFoot.rotation.y = THREE.MathUtils.lerp(rightFoot.rotation.y, 0, blendRate);
+              }
+
+              if (sws > 0) {
+                if (rightKnee) rightKnee.rotation.x = THREE.MathUtils.lerp(rightKnee.rotation.x, sws * 0.65, blendRate);
+                if (leftKnee) leftKnee.rotation.x = THREE.MathUtils.lerp(leftKnee.rotation.x, 0, blendRate);
+                if (rightLeg) rightLeg.rotation.z = THREE.MathUtils.lerp(rightLeg.rotation.z, -0.05, blendRate);
+                if (leftLeg) leftLeg.rotation.z = THREE.MathUtils.lerp(leftLeg.rotation.z, 0.02, blendRate);
+              } else {
+                if (leftKnee) leftKnee.rotation.x = THREE.MathUtils.lerp(leftKnee.rotation.x, -sws * 0.65, blendRate);
+                if (rightKnee) rightKnee.rotation.x = THREE.MathUtils.lerp(rightKnee.rotation.x, 0, blendRate);
+                if (leftLeg) leftLeg.rotation.z = THREE.MathUtils.lerp(leftLeg.rotation.z, 0.05, blendRate);
+                if (rightLeg) rightLeg.rotation.z = THREE.MathUtils.lerp(rightLeg.rotation.z, -0.02, blendRate);
+              }
+            } else {
+              hips.position.x = THREE.MathUtils.lerp(hips.position.x, defaultHipsPos.x, blendRate);
+              hips.position.y = THREE.MathUtils.lerp(hips.position.y, defaultHipsPos.y, blendRate);
+              hips.position.z = THREE.MathUtils.lerp(hips.position.z, defaultHipsPos.z, blendRate);
+
+              if (leftKnee) leftKnee.rotation.x = THREE.MathUtils.lerp(leftKnee.rotation.x, 0, blendRate);
+              if (rightKnee) rightKnee.rotation.x = THREE.MathUtils.lerp(rightKnee.rotation.x, 0, blendRate);
+              if (leftLeg) leftLeg.rotation.z = THREE.MathUtils.lerp(leftLeg.rotation.z, 0, blendRate);
+              if (rightLeg) rightLeg.rotation.z = THREE.MathUtils.lerp(rightLeg.rotation.z, 0, blendRate);
+            }
+
+            if (!isPerformingAction) {
+              spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, Math.sin(time * 2) * 0.02, blendRate);
+              spine.rotation.y = THREE.MathUtils.lerp(spine.rotation.y, Math.cos(time * 1.5) * 0.02, blendRate);
+              
+              spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, -sws * 0.6, blendRate);
+              if (chest) {
+                chest.rotation.z = THREE.MathUtils.lerp(chest.rotation.z, -sws * 0.3, blendRate);
+              }
+              if (neck) {
+                neck.rotation.z = THREE.MathUtils.lerp(neck.rotation.z, sws * 0.4, blendRate);
+              }
+              if (head) {
+                head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, sws * 0.4, blendRate);
+              }
+            } else {
+              spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, 0, blendRate);
+              spine.rotation.y = THREE.MathUtils.lerp(spine.rotation.y, 0, blendRate);
+              spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, 0, blendRate);
+              if (chest) chest.rotation.z = THREE.MathUtils.lerp(chest.rotation.z, 0, blendRate);
+              if (neck) neck.rotation.z = THREE.MathUtils.lerp(neck.rotation.z, 0, blendRate);
+              if (head) head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, 0, blendRate);
+            }
+          }
         }
-        if (neck) {
-          neck.rotation.z = THREE.MathUtils.lerp(neck.rotation.z, sws * 0.4, 3 * delta);
-        }
-        if (head) {
-          head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, sws * 0.4, 3 * delta);
-        }
-      } else {
-        // Slowly ease spinal rot back to neat neutral during full animation actions to let VRMAnimation tracks bind cleanly
-        spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, 0, 4 * delta);
-        spine.rotation.y = THREE.MathUtils.lerp(spine.rotation.y, 0, 4 * delta);
-        spine.rotation.z = THREE.MathUtils.lerp(spine.rotation.z, 0, 4 * delta);
-        if (chest) chest.rotation.z = THREE.MathUtils.lerp(chest.rotation.z, 0, 4 * delta);
-        if (neck) neck.rotation.z = THREE.MathUtils.lerp(neck.rotation.z, 0, 4 * delta);
-        if (head) head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, 0, 4 * delta);
       }
 
       // Lead-and-follow twisting when turning in place to face a target!
@@ -3770,7 +4631,24 @@ export const GemmaNPC: React.FC = () => {
         }
       }
 
-      if (chest) chest.scale.setScalar(1 + Math.sin(time * 2) * 0.01);
+      // Volumetric 3D resting/active breathing model (Inhale expands chest in 3D and tilts upper torso, exhale contracts)
+      const breathFreq = isMoving ? 2.8 : 1.8; // Faster breathing during movement/locomotion
+      const breathVal = Math.sin(time * breathFreq);
+      const chestExpansionX = 1.0 + (isMoving ? 0.004 : 0.008) * breathVal; // slight side flare
+      const chestElevationY = 1.0 + (isMoving ? 0.003 : 0.005) * breathVal; // slight lift
+      const chestExpansionZ = 1.0 + (isMoving ? 0.008 : 0.016) * breathVal; // deep forward rise
+      
+      if (chest) {
+        chest.scale.set(chestExpansionX, chestElevationY, chestExpansionZ);
+        // Subtle posture change from inhalation (upper chest lifts up and pitches back slightly)
+        // Lerp/set directly instead of accumulative += so there is absolutely zero drift!
+        const targetChestRotX = (isMoving ? 0.005 : 0.012) * breathVal;
+        chest.rotation.x = THREE.MathUtils.lerp(chest.rotation.x, targetChestRotX, 10 * delta);
+      }
+      if (spine) {
+        const targetSpineRotX = (isMoving ? 0.002 : 0.006) * breathVal;
+        spine.rotation.x = THREE.MathUtils.lerp(spine.rotation.x, targetSpineRotX, 10 * delta);
+      }
 
       // Subtle head turns (only if not actively interacting/looking at someone)
       if (currentInstruction.action !== "interact") {
@@ -3793,17 +4671,43 @@ export const GemmaNPC: React.FC = () => {
             2 * delta,
           );
       } else {
-        // Reset head if interacting (the whole body rotates to face the target instead)
-        if (neck)
-          neck.rotation.y = THREE.MathUtils.lerp(neck.rotation.y, 0, 5 * delta);
-        if (head)
-          head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, 0, 5 * delta);
-        if (head)
-          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, 0, 5 * delta);
+        // --- ADAPTIVE EYE & HEAD GAZE ALIGNMENT ---
+        // Instead of resetting head/neck to zero when interacting, rotate head & neck dynamically 
+        // to face the smooth, saccade-offsetted LookAt target point for supreme AAA lifelike realism!
+        if (head && neck && lookAtTargetRef.current) {
+          head.getWorldPosition(_tempVec1); // use pre-allocated _tempVec1 for head world position
+          _tempVec2.copy(lookAtTargetRef.current.position).sub(_tempVec1); // local relative offset to lookAt target
+          
+          // Project the world direction vector into body's local space to compute precise relative angles
+          if (groupRef.current) {
+            _tempVec2.applyQuaternion(groupRef.current.quaternion.clone().invert());
+          }
+          
+          // Compute local relative yaw (horizontal) and pitch (vertical)
+          const targetYaw = Math.atan2(_tempVec2.x, _tempVec2.z);
+          const targetPitch = -Math.atan2(_tempVec2.y, Math.sqrt(_tempVec2.x * _tempVec2.x + _tempVec2.z * _tempVec2.z));
+          
+          // Clamp to strict natural human mechanical constraints (Yaw ~55 deg, Pitch ~35 deg)
+          const maxHeadYaw = 0.95;
+          const maxHeadPitch = 0.6;
+          const clampedYaw = THREE.MathUtils.clamp(targetYaw, -maxHeadYaw, maxHeadYaw);
+          const clampedPitch = THREE.MathUtils.clamp(targetPitch, -maxHeadPitch, maxHeadPitch);
+          
+          // Subtle physiological micro-tremors (physiological neck adjustments / stabilization)
+          const microJitterX = Math.sin(time * 12.0) * 0.004 * Math.cos(time * 3.5);
+          const microJitterY = Math.cos(time * 9.5) * 0.004 * Math.sin(time * 2.2);
+          
+          // Distribute rotation realistically between neck and head (35% neck, 65% head)
+          neck.rotation.y = THREE.MathUtils.lerp(neck.rotation.y, clampedYaw * 0.35 + microJitterY * 0.5, 6 * delta);
+          neck.rotation.x = THREE.MathUtils.lerp(neck.rotation.x, clampedPitch * 0.35 + microJitterX * 0.5, 6 * delta);
+          head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, clampedYaw * 0.65 + microJitterY, 6 * delta);
+          head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, clampedPitch * 0.65 + microJitterX, 6 * delta);
+        }
       }
 
       // Live leg bending logic - Continuous, non-locking mathematical skeleton blending model
       // Eliminates discontinuous branch thresholds to guarantee zero visual snapping!
+      const sws = hips.rotation.z;
       const maxAnatomicalShift = 0.14; // Matches the target limit
       const bendFactorR = THREE.MathUtils.clamp(sws / maxAnatomicalShift, 0, 1.0); // 0 when leaning right, 1.0 when learning fully left
       const bendFactorL = THREE.MathUtils.clamp(-sws / maxAnatomicalShift, 0, 1.0); // 0 when leaning left, 1.0 when leaning fully right
@@ -4086,42 +4990,317 @@ export const GemmaNPC: React.FC = () => {
           );
         }
       } else {
-        leftArm.rotation.z = THREE.MathUtils.lerp(
-          leftArm.rotation.z,
-          -1.1 + Math.sin(time * 1.2) * 0.02,
-          10 * delta,
-        );
-        leftArm.rotation.x = THREE.MathUtils.lerp(
-          leftArm.rotation.x,
-          0,
-          10 * delta,
-        );
-        rightArm.rotation.z = THREE.MathUtils.lerp(
-          rightArm.rotation.z,
-          1.1 - Math.sin(time * 1.2) * 0.02,
-          10 * delta,
-        );
-        rightArm.rotation.x = THREE.MathUtils.lerp(
-          rightArm.rotation.x,
-          0,
-          10 * delta,
-        );
-        if (leftLowerArm)
-          leftLowerArm.rotation.x = THREE.MathUtils.lerp(
-            leftLowerArm.rotation.x,
-            -0.1,
-            10 * delta,
-          );
-        if (rightLowerArm)
-          rightLowerArm.rotation.x = THREE.MathUtils.lerp(
-            rightLowerArm.rotation.x,
-            -0.1,
-            10 * delta,
-          );
+        // --- HIGH-FIDELITY PROCEDURAL ARM ANIMATION SYSTEM (Gemma) ---
+        // 1. Core Relaxed Pose (A-pose closer to body to remove 'limbo' look)
+        const baseRelaxedZ = 1.35; // ~77 degrees down (arms relaxed at sides)
+        const baseRelaxedX = 0.08; // Slight forward drape to clear thighs and clothing mesh
+        const baseLowerArmX = -0.22; // Natural organic elbow bend (prevents robotic lock-straight arms)
+
+        // 2. Out-of-phase organic breathing cycles (breathing micro-movements)
+        const breathePeriod = 1.1;
+        const leftBreatheZ = Math.sin(time * breathePeriod) * 0.016;
+        const rightBreatheZ = -Math.sin(time * breathePeriod + 0.3) * 0.016;
+        const leftBreatheX = Math.sin(time * breathePeriod + 0.5) * 0.01;
+        const rightBreatheX = Math.sin(time * breathePeriod + 0.8) * 0.01;
+
+        // 3. Weight-shift adaptation (dynamic hip tracking)
+        // Adjust arm hang to complement her hip sways (sws is hips.rotation.z)
+        const sws = hips ? hips.rotation.z : 0;
+        const weightShiftZOffset = -sws * 0.40; // complement hip angle
+
+        // 4. Inertial velocity and acceleration drag
+        const fSpeed = lState.smoothedLocalVelocity.z;
+        const lSpeed = lState.smoothedLocalVelocity.x;
+        
+        // Centrifugal/lateral motion makes both arms swing outwards slightly
+        const lateralCentrifugalZ = Math.abs(lSpeed) * 0.06;
+        
+        // Forward/backward speed and acceleration cause drag on the upper arms and extra elbow bend
+        const dragUpperArmX = fSpeed * 0.065 + localAccel.z * 0.014;
+        const dragLowerArmX = fSpeed * -0.12 + localAccel.z * -0.01;
+
+        // Combine all components into high-fidelity target angles
+        const targetLeftArmZ = -baseRelaxedZ + weightShiftZOffset - lateralCentrifugalZ + leftBreatheZ;
+        const targetRightArmZ = baseRelaxedZ + weightShiftZOffset + lateralCentrifugalZ + rightBreatheZ;
+
+        const targetLeftArmX = baseRelaxedX + dragUpperArmX + leftBreatheX;
+        const targetRightArmX = baseRelaxedX + dragUpperArmX + rightBreatheX;
+
+        const targetLeftLowerArmX = baseLowerArmX + dragLowerArmX;
+        const targetRightLowerArmX = baseLowerArmX + dragLowerArmX;
+
+        // Smoothly lerp towards our procedurally computed targets
+        leftArm.rotation.z = THREE.MathUtils.lerp(leftArm.rotation.z, targetLeftArmZ, 10 * delta);
+        leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, targetLeftArmX, 10 * delta);
+        
+        rightArm.rotation.z = THREE.MathUtils.lerp(rightArm.rotation.z, targetRightArmZ, 10 * delta);
+        rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, targetRightArmX, 10 * delta);
+
+        if (leftLowerArm) {
+          leftLowerArm.rotation.x = THREE.MathUtils.lerp(leftLowerArm.rotation.x, targetLeftLowerArmX, 10 * delta);
+        }
+        if (rightLowerArm) {
+          rightLowerArm.rotation.x = THREE.MathUtils.lerp(rightLowerArm.rotation.x, targetRightLowerArmX, 10 * delta);
+        }
       }
 
-      // Hands (Wrists)
-      if (!currentSignedWord && !speakingTextToSign) {
+      // --- ADVANCED INVERSE KINEMATICS (IK) FOR ARMS ---
+      let targetLeftIKInfluence = 1.0;
+      let targetRightIKInfluence = 1.0;
+
+      if (speakingTextToSign || currentSignedWord) {
+        targetLeftIKInfluence = 0.0;
+        targetRightIKInfluence = 0.0;
+      } else if (isPerformingGesture) {
+        // Smoothly fade out IK influence when a custom keyframed animation/gesture is active
+        targetLeftIKInfluence = 0.0;
+        targetRightIKInfluence = 0.0;
+      } else if (hands === "hips") {
+        targetLeftIKInfluence = 0.0;
+        targetRightIKInfluence = 0.0;
+      } else if (isHost && currentRoom === 'arena' && lastTargetedEnemyPosRef.current) {
+        // Let tactical shooting posture fully handle the right arm, but keep IK on the left arm for organic balancing
+        targetRightIKInfluence = 0.0;
+        targetLeftIKInfluence = 0.85;
+      }
+
+      // Smoothly lerp actual active IK influence to prevent sudden snapping
+      smoothedLeftIKInfluenceRef.current = THREE.MathUtils.lerp(
+        smoothedLeftIKInfluenceRef.current,
+        targetLeftIKInfluence,
+        10.0 * delta
+      );
+      smoothedRightIKInfluenceRef.current = THREE.MathUtils.lerp(
+        smoothedRightIKInfluenceRef.current,
+        targetRightIKInfluence,
+        10.0 * delta
+      );
+
+      const leftIKInfluence = smoothedLeftIKInfluenceRef.current;
+      const rightIKInfluence = smoothedRightIKInfluenceRef.current;
+
+      if (leftIKInfluence > 0.001 || rightIKInfluence > 0.001) {
+        // Synchronize current targets to her actual hand bones if we are transitioning in from a non-IK or low-influence state
+        if (leftHand) {
+          leftHand.getWorldPosition(_ik_pC);
+          if (!ikTargetLeftCurrentRef.current) {
+            ikTargetLeftCurrentRef.current = _ik_pC.clone();
+          } else if (leftIKInfluence < 0.05) {
+            ikTargetLeftCurrentRef.current.copy(_ik_pC);
+          }
+        }
+        if (rightHand) {
+          rightHand.getWorldPosition(_ik_pC);
+          if (!ikTargetRightCurrentRef.current) {
+            ikTargetRightCurrentRef.current = _ik_pC.clone();
+          } else if (rightIKInfluence < 0.05) {
+            ikTargetRightCurrentRef.current.copy(_ik_pC);
+          }
+        }
+
+        const wt = walkPhaseRef.current;
+        // 1. Resolve local space orientation vectors in world space
+        _ik_groupForward.set(0, 0, 1).applyQuaternion(groupRef.current.quaternion).normalize();
+        _ik_groupRight.set(1, 0, 0).applyQuaternion(groupRef.current.quaternion).normalize();
+
+        // 2. Resolve world positions of both shoulders
+        leftArm.getWorldPosition(_shoulderLeftWorld);
+        rightArm.getWorldPosition(_shoulderRightWorld);
+
+        // 3. Compute base resting target positions (hanging down, slightly outward and forward)
+        // L1 + L2 is roughly 0.60m. Using 0.52m keeps the arm slightly bent for a more natural look (never locks straight)
+        const restLength = 0.52;
+        
+        _ikTargetLeft.copy(_shoulderLeftWorld)
+          .addScaledVector(_ik_groupRight, -0.16)
+          .addScaledVector(_ik_groupForward, 0.06)
+          .addScaledVector(_upAxis, -restLength);
+
+        _ikTargetRight.copy(_shoulderRightWorld)
+          .addScaledVector(_ik_groupRight, 0.16)
+          .addScaledVector(_ik_groupForward, 0.06)
+          .addScaledVector(_upAxis, -restLength);
+
+        // 4. Add dynamic gait-based walk/run swings to wrist targets
+        if (isMoving) {
+          let armSwing = 0.5;
+          if (gait === "run") armSwing = 0.95;
+          if (gait === "sneak") armSwing = 0.25;
+          if (gait === "strut") armSwing = 0.70;
+
+          // Out-of-phase swings
+          const swingForwardLeft = Math.sin(wt + Math.PI) * armSwing * 0.18;
+          const swingForwardRight = Math.sin(wt) * armSwing * 0.18;
+
+          const swingUpLeft = Math.cos(wt * 2 + Math.PI) * armSwing * 0.04;
+          const swingUpRight = Math.cos(wt * 2) * armSwing * 0.04;
+
+          const swingOutLeft = -Math.sin(wt + Math.PI) * armSwing * 0.03;
+          const swingOutRight = Math.sin(wt) * armSwing * 0.03;
+
+          _ikTargetLeft
+            .addScaledVector(_ik_groupForward, swingForwardLeft)
+            .addScaledVector(_upAxis, swingUpLeft)
+            .addScaledVector(_ik_groupRight, swingOutLeft);
+
+          _ikTargetRight
+            .addScaledVector(_ik_groupForward, swingForwardRight)
+            .addScaledVector(_upAxis, swingUpRight)
+            .addScaledVector(_ik_groupRight, swingOutRight);
+
+          // Additional run pose modifications (elbows bent higher and tighter to the body)
+          if (gait === "run") {
+            _ikTargetLeft.addScaledVector(_upAxis, 0.16);
+            _ikTargetLeft.addScaledVector(_ik_groupForward, 0.14);
+            _ikTargetLeft.addScaledVector(_ik_groupRight, 0.04); // hug closer inwards
+
+            _ikTargetRight.addScaledVector(_upAxis, 0.16);
+            _ikTargetRight.addScaledVector(_ik_groupForward, 0.14);
+            _ikTargetRight.addScaledVector(_ik_groupRight, -0.04);
+          }
+        }
+
+        // 5. Out-of-phase organic micro-breathing cycles
+        const breathePeriod = 1.1;
+        const leftBreatheY = Math.sin(time * breathePeriod) * 0.006;
+        const rightBreatheY = -Math.sin(time * breathePeriod + 0.3) * 0.006;
+        const leftBreatheX = Math.cos(time * breathePeriod) * 0.004;
+        const rightBreatheX = -Math.cos(time * breathePeriod + 0.3) * 0.004;
+
+        _ikTargetLeft.addScaledVector(_upAxis, leftBreatheY).addScaledVector(_ik_groupRight, leftBreatheX);
+        _ikTargetRight.addScaledVector(_upAxis, rightBreatheY).addScaledVector(_ik_groupRight, rightBreatheX);
+
+        // 6. Dynamic balance counter-weights reacting to torso roll/pitch
+        const rollFactor = lState.currentLeanRoll;
+        const pitchFactor = lState.currentLeanPitch;
+
+        // Flare arms outward to balance roll (like walking a tightrope)
+        _ikTargetLeft.addScaledVector(_ik_groupRight, -Math.abs(rollFactor) * 0.25);
+        _ikTargetRight.addScaledVector(_ik_groupRight, Math.abs(rollFactor) * 0.25);
+
+        // Lean reaction: swing arms slightly backward when leaning forward
+        _ikTargetLeft.addScaledVector(_ik_groupForward, -pitchFactor * 0.18);
+        _ikTargetRight.addScaledVector(_ik_groupForward, -pitchFactor * 0.18);
+
+        // 7. Inertial drag & acceleration lag (arms lag behind the torso's movement)
+        const fSpeed = lState.smoothedLocalVelocity.z;
+        const lSpeed = lState.smoothedLocalVelocity.x;
+
+        _ikTargetLeft.addScaledVector(_ik_groupForward, -fSpeed * 0.05 - localAccel.z * 0.006);
+        _ikTargetRight.addScaledVector(_ik_groupForward, -fSpeed * 0.05 - localAccel.z * 0.006);
+
+        _ikTargetLeft.addScaledVector(_ik_groupRight, -lSpeed * 0.05 - localAccel.x * 0.006);
+        _ikTargetRight.addScaledVector(_ik_groupRight, -lSpeed * 0.05 - localAccel.x * 0.006);
+
+        // 8. User proximity reach (friendly, welcoming arm gesture when approaching her)
+        if (minUserDist < 1.6) {
+          const closeness = 1.0 - (minUserDist / 1.6); // 0 at 1.6m, 1 at 0m
+          const reachLift = closeness * 0.18;
+          const reachForward = closeness * 0.15;
+          const reachInward = closeness * 0.04;
+
+          _ikTargetLeft.addScaledVector(_upAxis, reachLift);
+          _ikTargetLeft.addScaledVector(_ik_groupForward, reachForward);
+          _ikTargetLeft.addScaledVector(_ik_groupRight, reachInward); // curve slightly inward
+
+          _ikTargetRight.addScaledVector(_upAxis, reachLift);
+          _ikTargetRight.addScaledVector(_ik_groupForward, reachForward);
+          _ikTargetRight.addScaledVector(_ik_groupRight, -reachInward);
+        }
+
+        // --- RELAXATION & SMOOTH INTERPOLATION STATE ---
+        // Smoothly interpolate her active IK targets towards their computed goals.
+        // When standing still or moving slowly, we apply a gentle, relaxed, slower transition to the rest state.
+        const currentMotionSpeed = Math.sqrt(fSpeed * fSpeed + lSpeed * lSpeed);
+        const isRelaxingState = !isMoving || currentMotionSpeed < 0.25;
+        const targetLerpSpeed = isRelaxingState ? 4.5 : 9.0; // Slower, softer transition for relaxation/resting
+
+        if (!ikTargetLeftCurrentRef.current) {
+          ikTargetLeftCurrentRef.current = _ikTargetLeft.clone();
+        } else {
+          ikTargetLeftCurrentRef.current.lerp(_ikTargetLeft, targetLerpSpeed * delta);
+        }
+
+        if (!ikTargetRightCurrentRef.current) {
+          ikTargetRightCurrentRef.current = _ikTargetRight.clone();
+        } else {
+          ikTargetRightCurrentRef.current.lerp(_ikTargetRight, targetLerpSpeed * delta);
+        }
+
+        // Apply the smoothed relaxed targets
+        _ikTargetLeft.copy(ikTargetLeftCurrentRef.current);
+        _ikTargetRight.copy(ikTargetRightCurrentRef.current);
+
+        // 9. Resolve core body world positions & execute anatomical repulsion checks (LOD optimized)
+        if (bones && minUserDist < 15.0) {
+          if (bones.hips) {
+            bones.hips.getWorldPosition(_ik_hipsWorld);
+          } else {
+            _ik_hipsWorld.copy(groupRef.current.position);
+          }
+          if (bones.spine) {
+            bones.spine.getWorldPosition(_ik_spineWorld);
+          } else {
+            _ik_spineWorld.copy(_ik_hipsWorld).addScaledVector(_upAxis, 0.25);
+          }
+          if (bones.chest) {
+            bones.chest.getWorldPosition(_ik_chestWorld);
+          } else {
+            _ik_chestWorld.copy(_ik_spineWorld).addScaledVector(_upAxis, 0.25);
+          }
+          if (bones.leftUpperLeg) {
+            bones.leftUpperLeg.getWorldPosition(_ik_leftThighWorld);
+          } else {
+            _ik_leftThighWorld.copy(_ik_hipsWorld).addScaledVector(_ik_groupRight, -0.1);
+          }
+          if (bones.rightUpperLeg) {
+            bones.rightUpperLeg.getWorldPosition(_ik_rightThighWorld);
+          } else {
+            _ik_rightThighWorld.copy(_ik_hipsWorld).addScaledVector(_ik_groupRight, 0.1);
+          }
+
+          // Force repel IK targets to prevent hand-torso, hand-thigh, and hand-skirt clipping
+          applyAnatomicalRepulsion(_ikTargetLeft, true, _ik_hipsWorld, _ik_spineWorld, _ik_chestWorld, _ik_leftThighWorld, _ik_rightThighWorld, _ik_groupForward, _ik_groupRight);
+          applyAnatomicalRepulsion(_ikTargetRight, false, _ik_hipsWorld, _ik_spineWorld, _ik_chestWorld, _ik_leftThighWorld, _ik_rightThighWorld, _ik_groupForward, _ik_groupRight);
+        }
+
+        // 10. Position the Elbow Poles (placed behind & slightly outward)
+        // Dynamically flare elbow poles outward if the hand targets are positioned close to her spine/center
+        const distToCenterLeft = bones && bones.spine ? _ikTargetLeft.distanceTo(_ik_spineWorld) : 0.45;
+        const flareLeft = THREE.MathUtils.clamp((0.45 - distToCenterLeft) * 0.8, 0, 0.3);
+        _ikPoleLeft.copy(_shoulderLeftWorld)
+          .addScaledVector(_ik_groupForward, -0.6)
+          .addScaledVector(_ik_groupRight, -0.35 - flareLeft);
+
+        const distToCenterRight = bones && bones.spine ? _ikTargetRight.distanceTo(_ik_spineWorld) : 0.45;
+        const flareRight = THREE.MathUtils.clamp((0.45 - distToCenterRight) * 0.8, 0, 0.3);
+        _ikPoleRight.copy(_shoulderRightWorld)
+          .addScaledVector(_ik_groupForward, -0.6)
+          .addScaledVector(_ik_groupRight, 0.35 + flareRight);
+
+        // 11. Execute 3D Two-Bone Analytical IK solver for left and right arms
+        if (leftIKInfluence > 0.001 && leftLowerArm) {
+          solveTwoBoneIK(leftArm, leftLowerArm, leftHand, _ikTargetLeft, _ikPoleLeft, true, leftIKInfluence);
+        }
+        if (rightIKInfluence > 0.001 && rightLowerArm) {
+          solveTwoBoneIK(rightArm, rightLowerArm, rightHand, _ikTargetRight, _ikPoleRight, false, rightIKInfluence);
+        }
+
+        // 11. Custom dynamic wrist flex based on velocity & motion to keep hands organic
+        if (!currentSignedWord && !speakingTextToSign) {
+          const wristFlexLeft = Math.sin(wt + Math.PI) * (isMoving ? 0.15 : 0.05) - (fSpeed * 0.05);
+          const wristFlexRight = Math.sin(wt) * (isMoving ? 0.15 : 0.05) - (fSpeed * 0.05);
+          if (leftHand) {
+            leftHand.rotation.x = THREE.MathUtils.lerp(leftHand.rotation.x, wristFlexLeft, 10 * delta);
+          }
+          if (rightHand) {
+            rightHand.rotation.x = THREE.MathUtils.lerp(rightHand.rotation.x, wristFlexRight, 10 * delta);
+          }
+        }
+      }
+
+      // Hands (Wrists) - Fallback for when IK is inactive
+      if (leftIKInfluence <= 0.001 && rightIKInfluence <= 0.001 && !currentSignedWord && !speakingTextToSign) {
         if (leftHand)
           leftHand.rotation.x = THREE.MathUtils.lerp(
             leftHand.rotation.x,
@@ -4135,7 +5314,23 @@ export const GemmaNPC: React.FC = () => {
             10 * delta,
           );
       }
-    }
+
+      // --- Procedural Movement-Based Weight Shifting & Torso Lean ---
+      const pitch = lState.currentLeanPitch;
+      const roll = lState.currentLeanRoll;
+
+      if (hips) {
+        const hipsLean = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * 0.15, 0, roll * 0.15));
+        hips.quaternion.multiply(hipsLean);
+      }
+      if (spine) {
+        const spineLean = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * 0.45, 0, roll * 0.45));
+        spine.quaternion.multiply(spineLean);
+      }
+      if (chest) {
+        const chestLean = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * 0.40, 0, roll * 0.40));
+        chest.quaternion.multiply(chestLean);
+      }
 
     // 6. (Mixer updated early)
 
@@ -4973,7 +6168,7 @@ export const GemmaNPC: React.FC = () => {
       setSpeakingTextToSign(textToSign);
 
       if (audio.source) {
-        audio.source.onended = () => {
+        (audio.source as any).onended = () => {
           setSpeakingTextToSign(null);
         };
       }
@@ -4998,6 +6193,8 @@ export const GemmaNPC: React.FC = () => {
         position={[0, 0, -5]}
         rotation={[0, 0, 0]}
         lockRotations
+        colliders={false}
+        collisionGroups={interactionGroups(2, [0])}
       >
       <group ref={groupRef}>
         {vrm && (
@@ -5077,6 +6274,34 @@ export const GemmaNPC: React.FC = () => {
         >
           <div className="bg-black/60 backdrop-blur-md text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-amber-300 px-3 py-1.5 rounded-lg text-sm font-bold font-mono border border-purple-500/30 shadow-[0_0_15px_rgba(168,85,247,0.4)]">
             Gemmai [{vrmUrl.includes("Casual") ? getTranslation(language, "casualStyle") : vrmUrl.includes("Cat") ? getTranslation(language, "nekoStyle") : vrmUrl.includes("Tactical") ? getTranslation(language, "tacticalStyle") : vrmUrl.includes("Tatted") ? getTranslation(language, "cyberpunkStyle") : getTranslation(language, "awakenedStyle")}]
+          </div>
+        </Html>
+
+        {/* SIMA-2 Autonomy HUD */}
+        <Html
+          position={[0, 3.4, 0]}
+          center
+          transform
+          sprite
+          zIndexRange={[105, 0]}
+          style={{ pointerEvents: "none" }}
+        >
+          <div className="flex flex-col items-center gap-1 select-none w-56 text-center">
+            {/* Cognitive Header Badge */}
+            <div className="bg-zinc-950/85 backdrop-blur-md border border-cyan-500/40 px-2 py-0.5 rounded text-[9px] font-mono font-bold text-cyan-400 flex items-center gap-1.5 shadow-[0_0_12px_rgba(34,211,238,0.25)] tracking-wider">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              <span>SIMA-2: {simaState}</span>
+            </div>
+            
+            {/* Real-time Dynamic Goal */}
+            <div className="bg-purple-950/80 backdrop-blur-md border border-purple-500/40 px-2.5 py-0.5 rounded text-[9px] font-mono font-semibold text-purple-300 leading-tight shadow-[0_0_8px_rgba(168,85,247,0.2)]">
+              GOAL: {autonomyGoal}
+            </div>
+
+            {/* Inner Thought Subtext */}
+            <div className="bg-black/80 backdrop-blur-md border border-zinc-800/80 px-2 py-1 rounded-md text-[8.5px] font-mono text-zinc-400 leading-normal max-w-[190px] break-words text-center shadow-lg italic">
+              "{autonomyThought}"
+            </div>
           </div>
         </Html>
 
@@ -5164,6 +6389,40 @@ export const GemmaNPC: React.FC = () => {
             color="#00ffd0" 
             transparent 
             opacity={Math.max(0.03, 0.25 * (1.0 - idx / Math.max(1, arenaWaypoints.length)))} 
+            depthWrite={false} 
+            toneMapped={false} 
+          />
+        </mesh>
+      </group>
+    ))}
+
+    {/* Absolute World-Space Beacons representing Gemma's dynamic NavMesh A* Cost Map path */}
+    {currentRoom !== 'arena' && navPathWaypoints.map((wp, idx) => (
+      <group key={`nav-path-beacon-${idx}`}>
+        <mesh 
+          position={[wp.x, -0.48, wp.z]} 
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          {/* Inner solid glowing purple node */}
+          <ringGeometry args={[0.0, 0.08, 16]} />
+          <meshBasicMaterial 
+            color="#a855f7" 
+            transparent 
+            opacity={Math.max(0.04, 0.35 * (1.0 - idx / Math.max(1, navPathWaypoints.length)))} 
+            depthWrite={false} 
+            toneMapped={false} 
+          />
+        </mesh>
+        <mesh 
+          position={[wp.x, -0.48, wp.z]} 
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          {/* Outer glowing cyan ring */}
+          <ringGeometry args={[0.12, 0.15, 16]} />
+          <meshBasicMaterial 
+            color="#06b6d4" 
+            transparent 
+            opacity={Math.max(0.02, 0.2 * (1.0 - idx / Math.max(1, navPathWaypoints.length)))} 
             depthWrite={false} 
             toneMapped={false} 
           />

@@ -97,7 +97,7 @@ export function useVoiceBones(vrm: VRM | null, isLocal: boolean) {
         sourceRef.current = source;
         dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
       } catch (err) {
-        console.error("[useVoiceBones] Audio analysis initialization error:", err);
+        console.warn("[useVoiceBones] Audio analysis initialization skipped:", err);
       }
     };
 

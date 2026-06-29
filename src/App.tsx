@@ -4,6 +4,7 @@ import { AvatarStudio } from './components/AvatarStudio';
 import { ChatBox } from './components/ChatBox';
 import { Scoreboard } from './components/Scoreboard';
 import { UserCount } from './components/UserCount';
+import { ConnectionStatus } from './components/ConnectionStatus';
 import { GesturesBar } from './components/GesturesBar';
 import { Minimap } from './components/Minimap';
 import { Branding } from './components/Branding';
@@ -777,6 +778,7 @@ function LoungeApp() {
       <ChatBox />
       <Scoreboard />
       {currentRoom !== 'arena' && <UserCount />}
+      {currentRoom !== 'arena' && <ConnectionStatus />}
       {currentRoom !== 'arena' && <GesturesBar />}
       {avatarLoading && (
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[50] pointer-events-none">

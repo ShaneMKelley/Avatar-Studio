@@ -5,6 +5,7 @@ import { Navigation } from 'lucide-react';
 
 export const Minimap = () => {
   const showMinimap = useStore(state => state.showMinimap);
+  const localUserId = useStore(state => state.localUserId);
   const localUserPosition = useStore(state => state.localUserPosition);
   const localUserRotation = useStore(state => state.localUserRotation);
   const users = useStore(state => state.users);
@@ -99,12 +100,14 @@ export const Minimap = () => {
         position: p.position,
         rotationVal: p.rotation,
       }))
-    : Object.values(users).map(u => ({
-        id: u.id,
-        name: u.name,
-        position: u.position,
-        rotationVal: u.rotation[1],
-      }));
+    : Object.values(users)
+        .filter(u => u.id !== localUserId)
+        .map(u => ({
+          id: u.id,
+          name: u.name,
+          position: u.position,
+          rotationVal: u.rotation[1],
+        }));
   
   if (!showMinimap) return null;
 

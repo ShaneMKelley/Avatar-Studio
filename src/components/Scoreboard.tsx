@@ -8,7 +8,9 @@ export const Scoreboard = () => {
   const localUserScore = useStore(state => state.localUserScore);
   
   const remoteUsersString = useStore(
-    state => Object.values(state.users).map(u => `${u.id}|${u.name}|${u.score || 0}`).join(',')
+    state => Object.values(state.users)
+      .filter(u => u.id !== state.localUserId)
+      .map(u => `${u.id}|${u.name}|${u.score || 0}`).join(',')
   );
 
   const remoteUsers = React.useMemo(() => {

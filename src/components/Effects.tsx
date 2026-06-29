@@ -8,6 +8,7 @@ import { useGameStore } from '../store';
 import * as THREE from 'three';
 import { useRef, useMemo, useEffect, useState } from 'react';
 import { Html } from '@react-three/drei';
+import { idleTaskQueue } from '../utils/idleTaskQueue';
 
 // Shared static geometries for maximum performance in the game loop
 const sharedLaserGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -90,6 +91,18 @@ function Laser({ start, end, color }: { start: [number, number, number], end: [n
     return { position, rotation, length };
   }, [start, end]);
 
+  const laserMaterial = useMemo(() => {
+    return new THREE.MeshBasicMaterial({ color, toneMapped: false, transparent: true, opacity: 1 });
+  }, [color]);
+
+  useEffect(() => {
+    return () => {
+      idleTaskQueue.enqueue(() => {
+        laserMaterial.dispose();
+      });
+    };
+  }, [laserMaterial]);
+
   useFrame((_, delta) => {
     if (ref.current) {
       const mat = ref.current.material as THREE.MeshBasicMaterial;
@@ -107,9 +120,8 @@ function Laser({ start, end, color }: { start: [number, number, number], end: [n
         rotation={rotation} 
         scale={[0.18, 0.18, length]} 
         geometry={sharedLaserGeometry}
-      >
-        <meshBasicMaterial color={color} toneMapped={false} transparent opacity={1} />
-      </mesh>
+        material={laserMaterial}
+      />
       
       {isPlayerWeapon && (
         <ThermalVaporTrail position={position.clone()} rotation={rotation} length={length} />
@@ -122,6 +134,18 @@ function ThermalVaporTrail({ position, rotation, length }: { position: THREE.Vec
   const ref = useRef<THREE.Mesh>(null);
   const driftY = useRef(0);
   const currentScale = useRef([0.3, 0.3, length]);
+
+  const vaporMaterial = useMemo(() => {
+    return new THREE.MeshBasicMaterial({ color: "#f97316", toneMapped: false, transparent: true, opacity: 0.65 });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      idleTaskQueue.enqueue(() => {
+        vaporMaterial.dispose();
+      });
+    };
+  }, [vaporMaterial]);
 
   useFrame((_, delta) => {
     if (ref.current) {
@@ -144,9 +168,8 @@ function ThermalVaporTrail({ position, rotation, length }: { position: THREE.Vec
       rotation={rotation}
       scale={currentScale.current as [number, number, number]}
       geometry={sharedLaserGeometry}
-    >
-      <meshBasicMaterial color="#f97316" toneMapped={false} transparent opacity={0.65} />
-    </mesh>
+      material={vaporMaterial}
+    />
   );
 }
 
@@ -163,6 +186,18 @@ function ParticleBurst({ position, color }: { position: [number, number, number]
     }));
   }, []);
 
+  const sharedMaterial = useMemo(() => {
+    return new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1, toneMapped: false });
+  }, [color]);
+
+  useEffect(() => {
+    return () => {
+      idleTaskQueue.enqueue(() => {
+        sharedMaterial.dispose();
+      });
+    };
+  }, [sharedMaterial]);
+
   useFrame((_, delta) => {
     if (group.current) {
       group.current.children.forEach((child, i) => {
@@ -177,9 +212,7 @@ function ParticleBurst({ position, color }: { position: [number, number, number]
   return (
     <group ref={group} position={position}>
       {particles.map((_, i) => (
-        <mesh key={i} geometry={sharedParticleGeometry}>
-          <meshBasicMaterial color={color} transparent opacity={1} toneMapped={false} />
-        </mesh>
+        <mesh key={i} geometry={sharedParticleGeometry} material={sharedMaterial} />
       ))}
     </group>
   );

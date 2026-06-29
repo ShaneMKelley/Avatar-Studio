@@ -70,23 +70,33 @@ async function startServer() {
   initializeMotherboardWebSocket(server, io);
 
   // Serve uploaded files with CORS headers
-  app.use('/uploads', express.static(uploadDir, {
-    setHeaders: (res) => {
-      res.set('Access-Control-Allow-Origin', '*');
-      res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      res.set('Access-Control-Allow-Headers', 'Content-Type, Range');
-    }
-  }));
+  app.use('/uploads', (req, res, next) => {
+    express.static(uploadDir, {
+      setHeaders: (res) => {
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Range');
+      }
+    })(req, res, (err) => {
+      if (err) return next(err);
+      res.status(404).send('Not Found');
+    });
+  });
 
   // Serve Gemmai models with CORS headers
   const gemmaiDir = path.join(process.cwd(), "Gemmai");
-  app.use('/Gemmai', express.static(gemmaiDir, {
-    setHeaders: (res) => {
-      res.set('Access-Control-Allow-Origin', '*');
-      res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      res.set('Access-Control-Allow-Headers', 'Content-Type, Range');
-    }
-  }));
+  app.use('/Gemmai', (req, res, next) => {
+    express.static(gemmaiDir, {
+      setHeaders: (res) => {
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Range');
+      }
+    })(req, res, (err) => {
+      if (err) return next(err);
+      res.status(404).send('Not Found');
+    });
+  });
 
   // Generic CORS middleware fallback for API and signaling endpoints
   app.use((req, res, next) => {
@@ -793,6 +803,7 @@ async function startServer() {
 
     // --- LOUNGE MULTIPLAYER ---
     socket.on("join", (userData) => {
+      console.log("Client emitted join event:", userData);
       const userId = userData.id || socket.id;
       socket.data.userId = userId;
       
@@ -1086,6 +1097,10 @@ async function startServer() {
   } else {
     app.use(express.static(path.join(process.cwd(), "dist")));
     app.get('*', (req, res) => {
+      if (req.path.startsWith('/uploads/') || req.path.startsWith('/api/')) {
+        res.status(404).send('Not Found');
+        return;
+      }
       res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
     });
   }

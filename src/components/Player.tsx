@@ -61,6 +61,7 @@ export function Player() {
   const aimProgress = useRef(0);
   const recoilOffset = useRef(0);
   const baseFov = useRef<number | null>(null);
+  const stuckTimer = useRef(0);
 
   // Tactical Dash Ability State
   const lastPressTimes = useRef<Record<string, number>>({ w: 0, a: 0, s: 0, d: 0 });
@@ -431,6 +432,31 @@ export function Player() {
     }
 
     body.current.setLinvel({ x: direction.x, y: velocity.y, z: direction.z }, true);
+
+    // Unstuck trigger mechanism: if movement velocity drops near zero while direction input is active for >500ms
+    const speedXZ = Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+    const hasInput = Math.abs(combinedMoveZ) > 0.1 || Math.abs(combinedMoveX) > 0.1;
+    if (hasInput && speedXZ < 0.25) {
+      stuckTimer.current += delta;
+      if (stuckTimer.current > 0.5) {
+        const pushDir = direction.clone();
+        if (pushDir.lengthSq() < 0.001) {
+          pushDir.copy(forward);
+          pushDir.y = 0;
+        }
+        pushDir.normalize();
+        pushDir.y = 0.25; // small upward lift
+        pushDir.x += (Math.random() - 0.5) * 0.4; // slight side push
+        pushDir.z += (Math.random() - 0.5) * 0.4;
+        pushDir.normalize();
+
+        const pushImpulse = pushDir.multiplyScalar(3.5);
+        body.current.applyImpulse({ x: pushImpulse.x, y: pushImpulse.y, z: pushImpulse.z }, true);
+        stuckTimer.current = 0;
+      }
+    } else {
+      stuckTimer.current = 0;
+    }
 
     // Apply heavy enemy Juggernaut Charge knockback impulses
     const knockback = useGameStore.getState().playerKnockback;

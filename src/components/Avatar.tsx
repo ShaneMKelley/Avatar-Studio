@@ -652,6 +652,9 @@ const _nextPosVec = new THREE.Vector3();
 const _tempAvatarPos = new THREE.Vector3();
 const _currentVel = new THREE.Vector3();
 const _targetVel = new THREE.Vector3();
+const _tempEuler = new THREE.Euler();
+const _poleTarget = new THREE.Vector3();
+const _tempOffsetVec = new THREE.Vector3();
 
 let footstepAudioContext: AudioContext | null = null;
 
@@ -783,6 +786,8 @@ export const Avatar: React.FC<AvatarProps> = ({
   const targetVowelA = useRef<number>(0);
 
   const initialUser = useStore.getState().users[userId];
+  const initialLocalPosition = useRef(useStore.getState().localUserPosition).current;
+  const initialRemotePosition = useRef<[number, number, number]>(initialUser?.position || [0, 5, 0]).current;
   const targetPosition = useRef<THREE.Vector3>(
     initialUser && initialUser.position
       ? new THREE.Vector3(
@@ -793,6 +798,7 @@ export const Avatar: React.FC<AvatarProps> = ({
       : new THREE.Vector3(),
   );
   const jumpCooldownRef = useRef<number>(0);
+  const stuckTimerRef = useRef<number>(0);
   const targetRotation = useRef<THREE.Quaternion>(
     initialUser && initialUser.rotation
       ? new THREE.Quaternion().setFromEuler(
@@ -834,6 +840,30 @@ export const Avatar: React.FC<AvatarProps> = ({
   const masterVolume = useStore((state) => state.masterVolume);
 
   const keys = useKeyboard(isLocal);
+
+  // Subscribe to store updates for this remote user's position/rotation/vrmUrl
+  const storeUser = useStore((state) => state.users[userId]);
+
+  useEffect(() => {
+    if (!isLocal && storeUser) {
+      if (storeUser.position) {
+        targetPosition.current.set(
+          storeUser.position[0],
+          storeUser.position[1],
+          storeUser.position[2]
+        );
+      }
+      if (storeUser.rotation) {
+        targetRotation.current.setFromEuler(
+          new THREE.Euler(
+            storeUser.rotation[0],
+            storeUser.rotation[1],
+            storeUser.rotation[2]
+          )
+        );
+      }
+    }
+  }, [isLocal, storeUser]);
 
   // WebXR Hooks
   const isPresenting = useXR((state) => state.session !== undefined);
@@ -885,16 +915,16 @@ export const Avatar: React.FC<AvatarProps> = ({
   const setAvatarLoadingProgress = useStore((state) => state.setAvatarLoadingProgress);
   const isLoading = useStore((state) => state.avatarLoading);
   const hasDroppedRef = useRef<boolean>(false);
+  const lerpedMoveDirRef = useRef<THREE.Vector3>(new THREE.Vector3());
 
   useEffect(() => {
     let isMounted = true;
     let currentVrm: VRM | null = null;
     const loader = new GLTFLoader();
     loader.register((parser) => {
-      const isWebGPU = isWebGPURendererActive();
       return new VRMLoaderPlugin(parser, {
         mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, {
-          materialType: isWebGPU ? MToonNodeMaterial : undefined,
+          materialType: undefined,
         })
       });
     });
@@ -922,7 +952,19 @@ export const Avatar: React.FC<AvatarProps> = ({
 
         // Refine Physics (Jiggle)
         if (loadedVrm.springBoneManager) {
-          // --- ANTI-CLIPPING: Inflate body colliders ---
+          // --- ANTI-CLIPPING & IK FIXES ---
+          // Prevent arms from twisting/deforming during procedural movement or IK
+          const fixArmRotations = (boneName: VRMHumanBoneName) => {
+            const bone = loadedVrm.humanoid?.getNormalizedBoneNode(boneName);
+            if (bone) bone.rotation.order = "YXZ";
+          };
+          fixArmRotations(VRMHumanBoneName.LeftUpperArm);
+          fixArmRotations(VRMHumanBoneName.LeftLowerArm);
+          fixArmRotations(VRMHumanBoneName.LeftHand);
+          fixArmRotations(VRMHumanBoneName.RightUpperArm);
+          fixArmRotations(VRMHumanBoneName.RightLowerArm);
+          fixArmRotations(VRMHumanBoneName.RightHand);
+
           // Access the static bounds (legs, hips, torso) and inflate them so
           // clothing spring bones bounce further away from the skin.
           const springManager = loadedVrm.springBoneManager as any;
@@ -998,7 +1040,16 @@ export const Avatar: React.FC<AvatarProps> = ({
           loadedVrm.springBoneManager.joints.forEach((joint) => {
             const name = joint.bone.name.toLowerCase();
 
-            if (name.includes("hair")) {
+            if (
+              name.includes("bust") ||
+              name.includes("breast") ||
+              name.includes("oppai") ||
+              name.includes("mune")
+            ) {
+              // Bust/Breasts: moderate stiffness and balanced damping/drag for subtle, natural movement (jiggle)
+              joint.settings.stiffness *= 1.3;
+              joint.settings.dragForce *= 1.8;
+            } else if (name.includes("hair")) {
               // Hair: bouncy, light, flows easily
               joint.settings.stiffness *= 0.4;
               joint.settings.dragForce *= 0.5;
@@ -1472,9 +1523,21 @@ export const Avatar: React.FC<AvatarProps> = ({
           }, 0);
         }
       },
-        (error) => {
-          console.error(`Error loading VRM from ${vrmUrl}:`, error);
-          if (retries > 0) {
+        (error: any) => {
+          const errorMessage = String(error?.message || error || '');
+          const isHtmlError = error instanceof SyntaxError || 
+                              errorMessage.includes('Unexpected token') || 
+                              errorMessage.includes('<!doctype') || 
+                              errorMessage.includes('JSON');
+          const isNotFoundError = errorMessage.includes('404');
+          
+          if (!isHtmlError && !isNotFoundError) {
+            console.error(`Error loading VRM from ${vrmUrl}:`, error);
+          } else {
+            console.warn(`Could not load VRM from ${vrmUrl} (404/invalid format).`);
+          }
+
+          if (retries > 0 && !isHtmlError && !isNotFoundError) {
             const delay = (4 - retries) * 1500;
             console.warn(`[Avatar] Retrying VRM load due to error in ${delay}ms... (${retries} attempts left)`);
             setTimeout(() => {
@@ -1533,14 +1596,8 @@ export const Avatar: React.FC<AvatarProps> = ({
 
       if (hugActionRef.current) {
         if (localUserGesture === "hug") {
+          hugActionRef.current.paused = false;
           hugActionRef.current.reset().fadeIn(0.2).play();
-          // Automatically clear hugging state after a few seconds so we don't get stuck
-          setTimeout(() => {
-            // Only clear if still hugging
-            if (useStore.getState().localUserGesture === "hug") {
-              useStore.getState().setLocalUserGesture(null);
-            }
-          }, 3000);
         } else {
           hugActionRef.current.fadeOut(0.2);
         }
@@ -1564,6 +1621,7 @@ export const Avatar: React.FC<AvatarProps> = ({
 
       if (victoryActionRef.current) {
         if (localUserGesture === "victory") {
+          victoryActionRef.current.paused = false;
           victoryActionRef.current.reset().fadeIn(0.2).play();
         } else {
           victoryActionRef.current.fadeOut(0.2);
@@ -1587,6 +1645,28 @@ export const Avatar: React.FC<AvatarProps> = ({
       rigidBodyRef.current.setLinvel({ x: 0, y: -1, z: 0 }, true);
     }
   }, [currentRoom, isLocal]);
+
+  // Handle global teleportation event for administrative portal warps and debugging
+  useEffect(() => {
+    if (!isLocal) return;
+
+    const handleTeleport = (e: Event) => {
+      const customEvent = e as CustomEvent<{ x: number; y: number; z: number }>;
+      if (rigidBodyRef.current && customEvent.detail) {
+        rigidBodyRef.current.setTranslation({
+          x: customEvent.detail.x,
+          y: customEvent.detail.y + 1.5, // Spawn slightly higher up
+          z: customEvent.detail.z
+        }, true);
+        rigidBodyRef.current.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      }
+    };
+
+    window.addEventListener('teleport-local-player', handleTeleport);
+    return () => {
+      window.removeEventListener('teleport-local-player', handleTeleport);
+    };
+  }, [isLocal]);
 
   // Setup remote audio stream
   const { camera } = useThree();
@@ -1645,7 +1725,7 @@ export const Avatar: React.FC<AvatarProps> = ({
           dataArrayRef.current = new Uint8Array(analyzer.frequencyBinCount);
           useStore.getState().setMicStream(stream);
         } catch (err) {
-          console.error("Error accessing microphone:", err);
+          console.warn("Microphone access is unavailable or denied. The system will fall back to automatic procedural animations.", err);
         }
       };
       initAudio();
@@ -1807,13 +1887,22 @@ export const Avatar: React.FC<AvatarProps> = ({
         }
       }
 
+      // Normalize raw input direction to keep speed uniform across diagonals
+      if (_moveDir.lengthSq() > 0.001) {
+        _moveDir.normalize();
+      }
+
+      // Smoothly interpolate the movement control input vector (lerp)
+      const inputLerpRate = _moveDir.lengthSq() > 0.001 ? 10 : 15; // Smooth onset, faster cessation
+      lerpedMoveDirRef.current.lerp(_moveDir, inputLerpRate * delta);
+
       const linvel = rigidBodyRef.current.linvel();
 
       // Implement acceleration/deceleration curves using lerp
       _currentVel.set(linvel.x, 0, linvel.z);
-      _targetVel.set(_moveDir.x * speed, 0, _moveDir.z * speed);
+      _targetVel.set(lerpedMoveDirRef.current.x * speed, 0, lerpedMoveDirRef.current.z * speed);
       
-      const hasInput = _moveDir.lengthSq() > 0.001;
+      const hasInput = lerpedMoveDirRef.current.lengthSq() > 0.001;
       const velocityLerpRate = hasInput ? 8 * delta : 12 * delta;
       _currentVel.lerp(_targetVel, velocityLerpRate);
 
@@ -1850,6 +1939,30 @@ export const Avatar: React.FC<AvatarProps> = ({
       }
 
       rigidBodyRef.current.setLinvel(nextVel, true);
+
+      // Unstuck trigger mechanism: if movement velocity drops near zero while direction input is active for >500ms
+      const speedXZ = Math.sqrt(linvel.x * linvel.x + linvel.z * linvel.z);
+      if (hasInput && speedXZ < 0.25) {
+        stuckTimerRef.current += delta;
+        if (stuckTimerRef.current > 0.5) {
+          const pushDir = lerpedMoveDirRef.current.clone();
+          if (pushDir.lengthSq() < 0.001) {
+            state.camera.getWorldDirection(pushDir);
+            pushDir.y = 0;
+          }
+          pushDir.normalize();
+          pushDir.y = 0.25; // small upward lift
+          pushDir.x += (Math.random() - 0.5) * 0.4; // slight side push
+          pushDir.z += (Math.random() - 0.5) * 0.4;
+          pushDir.normalize();
+
+          const pushImpulse = pushDir.multiplyScalar(3.5);
+          rigidBodyRef.current.applyImpulse({ x: pushImpulse.x, y: pushImpulse.y, z: pushImpulse.z }, true);
+          stuckTimerRef.current = 0;
+        }
+      } else {
+        stuckTimerRef.current = 0;
+      }
 
       if (jumpCooldownRef.current > 0) {
         jumpCooldownRef.current -= delta;
@@ -1926,8 +2039,8 @@ export const Avatar: React.FC<AvatarProps> = ({
         rigidBodyRef.current.setRotation(_currentQuat, true);
 
         // Calculate turning delta dynamically
-        const euler = new THREE.Euler().setFromQuaternion(_currentQuat, 'YXZ');
-        const currentRotY = euler.y;
+        _tempEuler.setFromQuaternion(_currentQuat, 'YXZ');
+        const currentRotY = _tempEuler.y;
         
         let angleDelta = currentRotY - prevRotationYRef.current;
         // Wrap to [-PI, PI] to handle coordinate boundaries seamlessly
@@ -2009,11 +2122,11 @@ export const Avatar: React.FC<AvatarProps> = ({
           // Blend in Turning motion Layer (Sensitivity threshold 0.15 rad/s, peaks at 1.8 rad/s)
           if (Math.abs(angularVelocity) > 0.15) {
             const turnStrength = Math.min(0.75, (Math.abs(angularVelocity) - 0.15) / 1.65);
-            // Corrected: postive Y rotation = turning RIGHT, negative Y rotation = turning LEFT
+            // Three.js Right-Handed Coordinate System: positive Y rotation (counter-clockwise) = turning LEFT, negative = turning RIGHT
             if (angularVelocity > 0) {
-              targetTurnRightWeight = turnStrength;
-            } else {
               targetTurnLeftWeight = turnStrength;
+            } else {
+              targetTurnRightWeight = turnStrength;
             }
             // Scale down primary linear locomotion weights slightly to make way for anatomical turning poses
             const scaleFactor = 1.0 - turnStrength;
@@ -2024,8 +2137,8 @@ export const Avatar: React.FC<AvatarProps> = ({
         }
 
         // --- SHARP TURN / TURNAROUND TRANSITION DETECTION ---
-        // Find angle difference between current visual rotation angle (euler.y) and target movement direction
-        let pathAngleDiff = targetAngle - euler.y;
+        // Find angle difference between current visual rotation angle (currentRotY) and target movement direction
+        let pathAngleDiff = targetAngle - currentRotY;
         while (pathAngleDiff < -Math.PI) pathAngleDiff += Math.PI * 2;
         while (pathAngleDiff > Math.PI) pathAngleDiff -= Math.PI * 2;
         const absPathDiff = Math.abs(pathAngleDiff);
@@ -2033,6 +2146,7 @@ export const Avatar: React.FC<AvatarProps> = ({
         // If reversing direction sharply (> 2.1 rad / 120 degrees) with active speed, fire turnaround transition
         if (absPathDiff > 2.1 && animSpeed > 1.2) {
           if (turnaroundActionRef.current && !turnaroundActionRef.current.isRunning()) {
+            turnaroundActionRef.current.paused = false;
             turnaroundActionRef.current.reset().setEffectiveWeight(1.0).play();
           }
         }
@@ -2062,6 +2176,7 @@ export const Avatar: React.FC<AvatarProps> = ({
         
         if (isAcceleratingQuickly) {
           if (walkToRunActionRef.current && !walkToRunActionRef.current.isRunning()) {
+            walkToRunActionRef.current.paused = false;
             walkToRunActionRef.current.reset().setEffectiveWeight(1.0).play();
           }
         }
@@ -2197,8 +2312,8 @@ export const Avatar: React.FC<AvatarProps> = ({
         );
 
         // Reset rotation tracking & speed tracking
-        const euler = new THREE.Euler().setFromQuaternion(_currentQuat, 'YXZ');
-        prevRotationYRef.current = euler.y;
+        _tempEuler.setFromQuaternion(_currentQuat, 'YXZ');
+        prevRotationYRef.current = _tempEuler.y;
         prevHorizSpeedRef.current = 0;
         lerpedHorizSpeedRef.current = 0;
 
@@ -2229,8 +2344,8 @@ export const Avatar: React.FC<AvatarProps> = ({
         );
 
         // Reset rotation tracking & speed tracking
-        const euler = new THREE.Euler().setFromQuaternion(_currentQuat, 'YXZ');
-        prevRotationYRef.current = euler.y;
+        _tempEuler.setFromQuaternion(_currentQuat, 'YXZ');
+        prevRotationYRef.current = _tempEuler.y;
         prevHorizSpeedRef.current = 0;
         lerpedHorizSpeedRef.current = 0;
 
@@ -2392,9 +2507,9 @@ export const Avatar: React.FC<AvatarProps> = ({
               
               // Pole target for elbow: Down and slightly back from the shoulder
               leftArm.getWorldPosition(_worldPos);
-              const poleTarget = _worldPos.clone().add(new THREE.Vector3(-0.2, -1.0, -0.2));
+              _poleTarget.copy(_worldPos).add(_tempOffsetVec.set(-0.2, -1.0, -0.2));
               
-              solveTwoBoneIK(leftArm, leftLowerArm, leftHand, _targetPos, poleTarget);
+              solveTwoBoneIK(leftArm, leftLowerArm, leftHand, _targetPos, _poleTarget);
             }
           }
 
@@ -2432,9 +2547,9 @@ export const Avatar: React.FC<AvatarProps> = ({
               
               // Pole target for elbow: Down and slightly back from the shoulder
               rightArm.getWorldPosition(_worldPos);
-              const poleTarget = _worldPos.clone().add(new THREE.Vector3(0.2, -1.0, -0.2));
+              _poleTarget.copy(_worldPos).add(_tempOffsetVec.set(0.2, -1.0, -0.2));
               
-              solveTwoBoneIK(rightArm, rightLowerArm, rightHand, _targetPos, poleTarget);
+              solveTwoBoneIK(rightArm, rightLowerArm, rightHand, _targetPos, _poleTarget);
             }
           }
 
@@ -2472,15 +2587,22 @@ export const Avatar: React.FC<AvatarProps> = ({
           const gesture = useStore.getState().localUserGesture;
           const isJumping = isJumpingStateAction;
           const isDropping = dropActionRef.current ? dropActionRef.current.getEffectiveWeight() > 0.01 || dropActionRef.current.isRunning() : false;
-          const isPlayingAnim = gesture === "wave" || gesture === "cheer" || gesture === "dance" || gesture === "sign" || isJumping || isDropping; // Add more full-body Cartwheel animations here later
+          const isPlayingAnim = gesture === "wave" || gesture === "cheer" || gesture === "dance" || gesture === "sign" || gesture === "hug" || isJumping || isDropping; // Add more full-body Cartwheel animations here later
 
-          if (
-            !isPlayingAnim &&
-            (!walkActionRef.current ||
-              walkActionRef.current.getEffectiveWeight() < 0.1)
-          ) {
-            if (isMoving || wt > 0.01) {
-              // --- ENHANCED WALK CYCLE (Desktop) ---
+          const vrmaLocomotionWeight =
+            (walkActionRef.current?.getEffectiveWeight() || 0) +
+            (joggingActionRef.current?.getEffectiveWeight() || 0) +
+            (runActionRef.current?.getEffectiveWeight() || 0) +
+            (catwalkActionRef.current?.getEffectiveWeight() || 0);
+
+          const hasVRMALocomotion = !!(walkActionRef.current && walkActionRef.current.getClip());
+          const runProceduralWalk = !isPlayingAnim && !hasVRMALocomotion && (isMoving || wt > 0.01);
+          // Seamless blend window from idle to walk: complete fadeout at 0.1 m/s to prevent bone clobbering/fighting with VRMA locomotion
+          const idleFactor = Math.max(0, 1.0 - (lerpedHorizSpeedRef.current / 0.1));
+
+          if (!isPlayingAnim) {
+            if (runProceduralWalk) {
+              // --- ENHANCED WALK CYCLE (Desktop Fallback) ---
 
               // Adjust amplitude based on speed
               const speedFactor = Math.min(1.0, speed / 5.0);
@@ -2502,7 +2624,6 @@ export const Avatar: React.FC<AvatarProps> = ({
               if (neck) neck.rotation.x = -Math.sin(wt * 2) * 0.02; // Head bobs slightly opposite to spine
 
               // 3. Legs (More natural swing and snap)
-              // Add a secondary sine wave to make the leg swing less linear and more pendulum-like
               leftLeg.rotation.x =
                 Math.sin(wt) * legAmp + Math.sin(wt * 2) * 0.1 * legAmp;
               rightLeg.rotation.x =
@@ -2569,200 +2690,216 @@ export const Avatar: React.FC<AvatarProps> = ({
                 rightHand.rotation.set(0, 0, 0);
               }
             } else {
-              // --- ENHANCED IDLE ---
+              // --- ENHANCED IDLE & VRMA BLENDING ---
               const time = state.clock.elapsedTime;
+              const blendRate = 10 * delta * idleFactor;
 
-              // Smoothly reset walk rotations
-              hips.rotation.y = THREE.MathUtils.lerp(
-                hips.rotation.y,
-                0,
-                10 * delta,
-              );
-              hips.rotation.z = THREE.MathUtils.lerp(
-                hips.rotation.z,
-                0,
-                10 * delta,
-              );
-              hips.rotation.x = THREE.MathUtils.lerp(
-                hips.rotation.x,
-                0,
-                10 * delta,
-              );
-
-              // Reset spine fully
-              spine.rotation.x = Math.sin(time * 2) * 0.02;
-              spine.rotation.y = Math.cos(time * 1.5) * 0.02;
-              spine.rotation.z = THREE.MathUtils.lerp(
-                spine.rotation.z,
-                0,
-                10 * delta,
-              );
-
-              if (chest) {
-                chest.rotation.x = Math.sin(time * 2) * 0.02;
-                chest.rotation.y = THREE.MathUtils.lerp(
-                  chest.rotation.y,
+              if (blendRate > 0.001) {
+                // Smoothly reset walk rotations
+                hips.rotation.y = THREE.MathUtils.lerp(
+                  hips.rotation.y,
                   0,
-                  10 * delta,
+                  blendRate,
                 );
-                chest.rotation.z = THREE.MathUtils.lerp(
-                  chest.rotation.z,
+                hips.rotation.z = THREE.MathUtils.lerp(
+                  hips.rotation.z,
                   0,
-                  10 * delta,
+                  blendRate,
                 );
-              }
-
-              if (neck) {
-                neck.rotation.x = THREE.MathUtils.lerp(
-                  neck.rotation.x,
+                hips.rotation.x = THREE.MathUtils.lerp(
+                  hips.rotation.x,
                   0,
-                  10 * delta,
-                );
-                neck.rotation.y = THREE.MathUtils.lerp(
-                  neck.rotation.y,
-                  0,
-                  10 * delta,
-                );
-                neck.rotation.z = THREE.MathUtils.lerp(
-                  neck.rotation.z,
-                  0,
-                  10 * delta,
-                );
-              }
-
-              leftLeg.rotation.x = THREE.MathUtils.lerp(
-                leftLeg.rotation.x,
-                0,
-                10 * delta,
-              );
-              rightLeg.rotation.x = THREE.MathUtils.lerp(
-                rightLeg.rotation.x,
-                0,
-                10 * delta,
-              );
-              leftKnee.rotation.x = THREE.MathUtils.lerp(
-                leftKnee.rotation.x,
-                0,
-                10 * delta,
-              );
-              rightKnee.rotation.x = THREE.MathUtils.lerp(
-                rightKnee.rotation.x,
-                0,
-                10 * delta,
-              );
-              if (leftFoot)
-                leftFoot.rotation.x = THREE.MathUtils.lerp(
-                  leftFoot.rotation.x,
-                  0,
-                  10 * delta,
-                );
-              if (rightFoot)
-                rightFoot.rotation.x = THREE.MathUtils.lerp(
-                  rightFoot.rotation.x,
-                  0,
-                  10 * delta,
+                  blendRate,
                 );
 
-              leftArm.rotation.x = THREE.MathUtils.lerp(
-                leftArm.rotation.x,
-                0,
-                10 * delta,
-              );
-              leftArm.rotation.y = THREE.MathUtils.lerp(
-                leftArm.rotation.y,
-                0,
-                10 * delta,
-              );
-              leftArm.rotation.z = THREE.MathUtils.lerp(
-                leftArm.rotation.z,
-                -1.1 + Math.sin(time * 1.2) * 0.02,
-                10 * delta,
-              );
-
-              rightArm.rotation.x = THREE.MathUtils.lerp(
-                rightArm.rotation.x,
-                0,
-                10 * delta,
-              );
-              rightArm.rotation.y = THREE.MathUtils.lerp(
-                rightArm.rotation.y,
-                0,
-                10 * delta,
-              );
-              rightArm.rotation.z = THREE.MathUtils.lerp(
-                rightArm.rotation.z,
-                1.1 - Math.sin(time * 1.2) * 0.02,
-                10 * delta,
-              );
-
-              if (leftLowerArm && rightLowerArm) {
-                leftLowerArm.rotation.x = THREE.MathUtils.lerp(
-                  leftLowerArm.rotation.x,
-                  -0.1,
-                  10 * delta,
+                // Reset spine fully with idle sway
+                spine.rotation.x = THREE.MathUtils.lerp(
+                  spine.rotation.x,
+                  Math.sin(time * 2) * 0.02,
+                  blendRate,
                 );
-                leftLowerArm.rotation.y = THREE.MathUtils.lerp(
-                  leftLowerArm.rotation.y,
-                  0,
-                  10 * delta,
+                spine.rotation.y = THREE.MathUtils.lerp(
+                  spine.rotation.y,
+                  Math.cos(time * 1.5) * 0.02,
+                  blendRate,
                 );
-                leftLowerArm.rotation.z = THREE.MathUtils.lerp(
-                  leftLowerArm.rotation.z,
+                spine.rotation.z = THREE.MathUtils.lerp(
+                  spine.rotation.z,
                   0,
-                  10 * delta,
+                  blendRate,
                 );
 
-                rightLowerArm.rotation.x = THREE.MathUtils.lerp(
-                  rightLowerArm.rotation.x,
-                  -0.1,
-                  10 * delta,
-                );
-                rightLowerArm.rotation.y = THREE.MathUtils.lerp(
-                  rightLowerArm.rotation.y,
-                  0,
-                  10 * delta,
-                );
-                rightLowerArm.rotation.z = THREE.MathUtils.lerp(
-                  rightLowerArm.rotation.z,
-                  0,
-                  10 * delta,
-                );
-              }
+                if (chest) {
+                  chest.rotation.x = THREE.MathUtils.lerp(
+                    chest.rotation.x,
+                    Math.sin(time * 2) * 0.02,
+                    blendRate,
+                  );
+                  chest.rotation.y = THREE.MathUtils.lerp(
+                    chest.rotation.y,
+                    0,
+                    blendRate,
+                  );
+                  chest.rotation.z = THREE.MathUtils.lerp(
+                    chest.rotation.z,
+                    0,
+                    blendRate,
+                  );
+                }
 
-              if (leftHand && rightHand) {
-                leftHand.rotation.x = THREE.MathUtils.lerp(
-                  leftHand.rotation.x,
-                  -0.1,
-                  10 * delta,
-                );
-                leftHand.rotation.y = THREE.MathUtils.lerp(
-                  leftHand.rotation.y,
+                if (neck) {
+                  neck.rotation.x = THREE.MathUtils.lerp(
+                    neck.rotation.x,
+                    0,
+                    blendRate,
+                  );
+                  neck.rotation.y = THREE.MathUtils.lerp(
+                    neck.rotation.y,
+                    0,
+                    blendRate,
+                  );
+                  neck.rotation.z = THREE.MathUtils.lerp(
+                    neck.rotation.z,
+                    0,
+                    blendRate,
+                  );
+                }
+
+                leftLeg.rotation.x = THREE.MathUtils.lerp(
+                  leftLeg.rotation.x,
                   0,
-                  10 * delta,
+                  blendRate,
                 );
-                leftHand.rotation.z = THREE.MathUtils.lerp(
-                  leftHand.rotation.z,
+                rightLeg.rotation.x = THREE.MathUtils.lerp(
+                  rightLeg.rotation.x,
                   0,
-                  10 * delta,
+                  blendRate,
+                );
+                leftKnee.rotation.x = THREE.MathUtils.lerp(
+                  leftKnee.rotation.x,
+                  0,
+                  blendRate,
+                );
+                rightKnee.rotation.x = THREE.MathUtils.lerp(
+                  rightKnee.rotation.x,
+                  0,
+                  blendRate,
+                );
+                if (leftFoot)
+                  leftFoot.rotation.x = THREE.MathUtils.lerp(
+                    leftFoot.rotation.x,
+                    0,
+                    blendRate,
+                  );
+                if (rightFoot)
+                  rightFoot.rotation.x = THREE.MathUtils.lerp(
+                    rightFoot.rotation.x,
+                    0,
+                    blendRate,
+                  );
+
+                leftArm.rotation.x = THREE.MathUtils.lerp(
+                  leftArm.rotation.x,
+                  0,
+                  blendRate,
+                );
+                leftArm.rotation.y = THREE.MathUtils.lerp(
+                  leftArm.rotation.y,
+                  0,
+                  blendRate,
+                );
+                leftArm.rotation.z = THREE.MathUtils.lerp(
+                  leftArm.rotation.z,
+                  -1.1 + Math.sin(time * 1.2) * 0.02,
+                  blendRate,
                 );
 
-                rightHand.rotation.x = THREE.MathUtils.lerp(
-                  rightHand.rotation.x,
-                  -0.1,
-                  10 * delta,
-                );
-                rightHand.rotation.y = THREE.MathUtils.lerp(
-                  rightHand.rotation.y,
+                rightArm.rotation.x = THREE.MathUtils.lerp(
+                  rightArm.rotation.x,
                   0,
-                  10 * delta,
+                  blendRate,
                 );
-                rightHand.rotation.z = THREE.MathUtils.lerp(
-                  rightHand.rotation.z,
+                rightArm.rotation.y = THREE.MathUtils.lerp(
+                  rightArm.rotation.y,
                   0,
-                  10 * delta,
+                  blendRate,
                 );
+                rightArm.rotation.z = THREE.MathUtils.lerp(
+                  rightArm.rotation.z,
+                  1.1 - Math.sin(time * 1.2) * 0.02,
+                  blendRate,
+                );
+
+                if (leftLowerArm && rightLowerArm) {
+                  leftLowerArm.rotation.x = THREE.MathUtils.lerp(
+                    leftLowerArm.rotation.x,
+                    -0.1,
+                    blendRate,
+                  );
+                  leftLowerArm.rotation.y = THREE.MathUtils.lerp(
+                    leftLowerArm.rotation.y,
+                    0,
+                    blendRate,
+                  );
+                  leftLowerArm.rotation.z = THREE.MathUtils.lerp(
+                    leftLowerArm.rotation.z,
+                    0,
+                    blendRate,
+                  );
+
+                  rightLowerArm.rotation.x = THREE.MathUtils.lerp(
+                    rightLowerArm.rotation.x,
+                    -0.1,
+                    blendRate,
+                  );
+                  rightLowerArm.rotation.y = THREE.MathUtils.lerp(
+                    rightLowerArm.rotation.y,
+                    0,
+                    blendRate,
+                  );
+                  rightLowerArm.rotation.z = THREE.MathUtils.lerp(
+                    rightLowerArm.rotation.z,
+                    0,
+                    blendRate,
+                  );
+                }
+
+                if (leftHand && rightHand) {
+                  leftHand.rotation.x = THREE.MathUtils.lerp(
+                    leftHand.rotation.x,
+                    -0.1,
+                    blendRate,
+                  );
+                  leftHand.rotation.y = THREE.MathUtils.lerp(
+                    leftHand.rotation.y,
+                    0,
+                    blendRate,
+                  );
+                  leftHand.rotation.z = THREE.MathUtils.lerp(
+                    leftHand.rotation.z,
+                    0,
+                    blendRate,
+                  );
+
+                  rightHand.rotation.x = THREE.MathUtils.lerp(
+                    rightHand.rotation.x,
+                    -0.1,
+                    blendRate,
+                  );
+                  rightHand.rotation.y = THREE.MathUtils.lerp(
+                    rightHand.rotation.y,
+                    0,
+                    blendRate,
+                  );
+                  rightHand.rotation.z = THREE.MathUtils.lerp(
+                    rightHand.rotation.z,
+                    0,
+                    blendRate,
+                  );
+                }
               }
             } // Close idle block
+          }
 
             // 3.5 Gestures (Overrides walk/idle for specific bones)
             const t = state.clock.elapsedTime * 12;
@@ -2809,7 +2946,6 @@ export const Avatar: React.FC<AvatarProps> = ({
                 groupRef.current.position.y = Math.abs(Math.cos(t * 1.2)) * 0.1;
               }
             } // End gesture === 'dance'
-          } // End !isPlayingAnim
         } // End non-vr else
       } // End if (hips)
 
@@ -2852,18 +2988,18 @@ export const Avatar: React.FC<AvatarProps> = ({
       // Avoid Euler allocation if possible, or just use the quaternion
       // We broadcast euler for rotation, let's just use Euler but avoid allocating every frame if we can
       // Actually, we can just use a shared Euler
-      const euler = new THREE.Euler().setFromQuaternion(
+      _tempEuler.setFromQuaternion(
         _currentQuat.set(rotQ.x, rotQ.y, rotQ.z, rotQ.w),
       );
 
       const stateUserPos = useStore.getState().localUserPosition || [0, 0, 0];
       const posDiffSq = (pos.x - stateUserPos[0])**2 + (pos.y - stateUserPos[1])**2 + (pos.z - stateUserPos[2])**2;
       const currentRot = useStore.getState().localUserRotation || [0, 0, 0];
-      const rotDistSq = (euler.x - currentRot[0])**2 + (euler.y - currentRot[1])**2 + (euler.z - currentRot[2])**2;
+      const rotDistSq = (_tempEuler.x - currentRot[0])**2 + (_tempEuler.y - currentRot[1])**2 + (_tempEuler.z - currentRot[2])**2;
 
       if (posDiffSq > 0.0001 || rotDistSq > 0.0001) {
         useStore.getState().setLocalUserPosition([pos.x, pos.y, pos.z]);
-        useStore.getState().setLocalUserRotation([euler.x, euler.y, euler.z]);
+        useStore.getState().setLocalUserRotation([_tempEuler.x, _tempEuler.y, _tempEuler.z]);
       }
 
       // Sync XR origin to avatar position so the player moves with the avatar
@@ -2877,7 +3013,7 @@ export const Avatar: React.FC<AvatarProps> = ({
         vowel_i: vowelI,
         vowel_o: vowelO,
         position: [pos.x, pos.y, pos.z],
-        rotation: [euler.x, euler.y, euler.z],
+        rotation: [_tempEuler.x, _tempEuler.y, _tempEuler.z],
       });
     } else {
       // Remote User: Client-Side SLERP
@@ -3118,36 +3254,16 @@ export const Avatar: React.FC<AvatarProps> = ({
         type={isLocal ? "dynamic" : "kinematicPosition"}
         lockRotations
         colliders={false}
-        position={isLocal ? [0, 5, 0] : initialUser?.position || [0, 5, 0]} // Start a bit high to fall in if local
+        position={isLocal ? [initialLocalPosition[0], 5, initialLocalPosition[2]] : initialRemotePosition}
         friction={0} // No friction so we don't get stuck on walls
         collisionGroups={interactionGroups(1, [0])}
         userData={{ isLocal }}
       >
         <CapsuleCollider args={[0.5, 0.3]} position={[0, 0.8, 0]} />
         <group ref={groupRef}>
-          {vrm && (
+          {vrm ? (
             <>
               <primitive object={vrm.scene} visible={!(isLocal && isFirstPerson)} />
-              {!isLocal && (
-                <Html
-                  position={[0, 2.8, 0]} // Positioned above the head
-                  center
-                  transform
-                  sprite
-                  zIndexRange={[100, 0]}
-                  style={{ pointerEvents: "none" }}
-                >
-                  <div className="flex flex-col items-center justify-center select-none">
-                    <div className="bg-black/60 backdrop-blur-md text-white px-3 py-1 rounded-lg text-lg font-bold font-mono border border-white/20 shadow-lg">
-                      Player {playerNumber}
-                    </div>
-                    <div className="text-white/90 text-sm mt-1 font-semibold drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)] font-sans">
-                      {userName}
-                    </div>
-                  </div>
-                </Html>
-              )}
-              <ChatBubble userId={userId} />
               <mesh
                 ref={auraRef}
                 position={[0, 0.05, 0]}
@@ -3172,7 +3288,49 @@ export const Avatar: React.FC<AvatarProps> = ({
                   vrm.humanoid.getNormalizedBoneNode("head")!,
                 )}
             </>
+          ) : (
+            // Futuristic glowing holographic loader placeholder
+            <mesh position={[0, 0.9, 0]}>
+              <capsuleGeometry args={[0.3, 0.9, 8, 16]} />
+              <meshBasicMaterial 
+                color={isLocal ? "#10b981" : "#06b6d4"} 
+                wireframe 
+                transparent 
+                opacity={0.65} 
+                toneMapped={false}
+              />
+            </mesh>
           )}
+
+          {/* Persistent Name tag rendering even during VRM model download */}
+          {!isLocal && (
+            <Html
+              position={[0, 2.5, 0]} // Fixed height above player origin
+              center
+              transform
+              sprite
+              zIndexRange={[100, 0]}
+              style={{ pointerEvents: "none" }}
+            >
+              <div className="flex flex-col items-center justify-center select-none">
+                <div className="bg-black/75 backdrop-blur-md text-white px-3 py-1 rounded-lg text-sm font-bold font-mono border border-cyan-500/30 shadow-lg flex items-center gap-1.5">
+                  {!vrm && (
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+                    </span>
+                  )}
+                  Player {playerNumber}
+                </div>
+                <div className="text-white/95 text-xs mt-1 font-semibold drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)] font-sans bg-zinc-950/40 px-2 py-0.5 rounded flex items-center gap-1">
+                  <span>{userName}</span>
+                  {!vrm && <span className="text-[10px] text-cyan-400 font-normal animate-pulse">(Downloading VRM...)</span>}
+                </div>
+              </div>
+            </Html>
+          )}
+
+          <ChatBubble userId={userId} />
         </group>
       </RigidBody>
 

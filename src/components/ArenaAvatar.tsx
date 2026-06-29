@@ -22,10 +22,9 @@ export function ArenaAvatar({ url, disabled = false, speedRef, lastShotTime, las
     let active = true;
     const loader = new GLTFLoader();
     loader.register((parser) => {
-      const isWebGPU = isWebGPURendererActive();
       return new VRMLoaderPlugin(parser, {
         mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, {
-          materialType: isWebGPU ? MToonNodeMaterial : undefined,
+          materialType: undefined,
         })
       });
     });
@@ -92,9 +91,21 @@ export function ArenaAvatar({ url, disabled = false, speedRef, lastShotTime, las
           }
         },
         undefined,
-        (err) => {
+        (err: any) => {
           console.error(`Failed to load Avatar model from ${targetUrl}:`, err);
-          if (retries > 0) {
+          const isHtmlError = err instanceof SyntaxError || 
+                              (err && typeof err === 'object' && err.message && (
+                                err.message.includes('Unexpected token') || 
+                                err.message.includes('<!doctype') || 
+                                err.message.includes('JSON')
+                              )) ||
+                              (typeof err === 'string' && (
+                                err.includes('Unexpected token') || 
+                                err.includes('<!doctype') || 
+                                err.includes('JSON')
+                              ));
+
+          if (retries > 0 && !isHtmlError) {
             const delay = (4 - retries) * 1500;
             console.warn(`[ArenaAvatar] Retrying load due to error in ${delay}ms... (${retries} attempts left)`);
             setTimeout(() => {
@@ -282,5 +293,20 @@ export function ArenaAvatar({ url, disabled = false, speedRef, lastShotTime, las
 
   if (vrm) return <primitive object={vrm.scene} />;
   if (glbScene) return <primitive object={glbScene} />;
-  return null;
+  
+  // High-contrast futuristic cyber-mesh fallback for Arena
+  return (
+    <group position={[0, 0.9, 0]}>
+      <mesh>
+        <capsuleGeometry args={[0.3, 0.9, 8, 16]} />
+        <meshBasicMaterial 
+          color="#f43f5e" 
+          wireframe 
+          transparent 
+          opacity={0.65} 
+          toneMapped={false}
+        />
+      </mesh>
+    </group>
+  );
 }
