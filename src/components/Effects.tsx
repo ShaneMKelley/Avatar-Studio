@@ -43,6 +43,17 @@ function DamageTextIndicator({ text, position, color, isCritical }: { text: stri
     setOpacity(prev => Math.max(0, prev - delta * 1.5));
   });
 
+  const parsedDamage = useMemo(() => {
+    const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+    return isNaN(val) ? 10 : val;
+  }, [text]);
+
+  const scale = useMemo(() => {
+    // Dynamically scale: e.g. 10 damage -> ~0.85 scale, 100+ damage -> ~2.0+ scale
+    const baseScale = 0.8 + Math.min(1.4, parsedDamage / 60);
+    return isCritical ? baseScale * 1.25 : baseScale;
+  }, [parsedDamage, isCritical]);
+
   if (opacity <= 0) return null;
 
   return (
@@ -54,14 +65,15 @@ function DamageTextIndicator({ text, position, color, isCritical }: { text: stri
       <div 
         className={`font-mono font-black select-none pointer-events-none transition-all duration-75 whitespace-nowrap px-2.5 py-1 rounded shadow-2xl skew-x-[-12deg] flex items-center justify-center ${
           isCritical 
-            ? 'text-lg md:text-xl tracking-wider uppercase border-2 scale-110 bg-zinc-950/90 text-yellow-300 animate-pulse font-extrabold' 
+            ? 'text-lg md:text-xl tracking-wider uppercase border-2 bg-zinc-950/90 text-yellow-300 animate-pulse font-extrabold' 
             : 'text-xs md:text-sm bg-black/90 text-cyan-400 border border-cyan-500/50'
         }`}
         style={{
           borderColor: color,
           textShadow: `0 0 8px ${color}`,
           boxShadow: `0 0 15px ${isCritical ? 'rgba(239, 68, 68, 0.4)' : 'rgba(34, 211, 238, 0.2)'}`,
-          opacity: opacity
+          opacity: opacity,
+          transform: `scale(${scale})`
         }}
       >
         <span>

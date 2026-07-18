@@ -40,6 +40,8 @@ export const SettingsMenu: React.FC = () => {
   const setShowEnemyHealthBars = useStore(state => state.setShowEnemyHealthBars);
   const showMinimap = useStore(state => state.showMinimap);
   const setShowMinimap = useStore(state => state.setShowMinimap);
+  const performanceMode = useStore(state => state.performanceMode);
+  const setPerformanceMode = useStore(state => state.setPerformanceMode);
   const geminiApiKey = useStore(state => state.geminiApiKey);
   const setGeminiApiKey = useStore(state => state.setGeminiApiKey);
   const [showKey, setShowKey] = useState(false);
@@ -56,7 +58,8 @@ export const SettingsMenu: React.FC = () => {
   // Render engine backend state
   const [rendererBackend, setRendererBackend] = useState<'webgl' | 'webgpu'>(() => {
     if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-      return (localStorage.getItem('rendering_backend') as 'webgl' | 'webgpu') || 'webgl';
+      const saved = localStorage.getItem('rendering_backend') as 'webgl' | 'webgpu' | null;
+      if (saved) return saved;
     }
     return 'webgl';
   });
@@ -510,6 +513,46 @@ export const SettingsMenu: React.FC = () => {
                   }`}
                 >
                   {showMinimap ? getTranslation(language, 'visible') : getTranslation(language, 'hidden')}
+                </button>
+              </div>
+
+              {/* Performance Mode Toggle */}
+              <div className="flex items-center justify-between border-t border-white/10 pt-4 mt-2">
+                <div className="flex items-center gap-3 text-zinc-200">
+                  <Cpu className={`w-5 h-5 ${performanceMode ? 'text-green-400' : 'text-zinc-500'}`} />
+                  <div className="flex flex-col">
+                    <span className="font-medium text-sm">Performance Mode</span>
+                    <span className="text-[10px] text-zinc-500 font-light max-w-[200px]">Disables VHS scanlines & postprocessing bloom glows to boost FPS.</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPerformanceMode(!performanceMode)}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors text-sm ${
+                    performanceMode 
+                      ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' 
+                      : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white'
+                  }`}
+                >
+                  {performanceMode ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              {/* Performance Debug Monitor */}
+              <div className="flex items-center justify-between border-t border-white/10 pt-4 mt-2">
+                <div className="flex items-center gap-3 text-zinc-200">
+                  <Activity className="w-5 h-5 text-red-400 animate-pulse" />
+                  <div className="flex flex-col">
+                    <span className="font-medium text-sm text-left">Hardware Debug Console</span>
+                    <span className="text-[10px] text-zinc-500 font-light max-w-[200px] text-left">Launches a real-time hardware metrics overlay tracking draw calls, triangles, and VRAM memory.</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('toggle-perf-monitor'));
+                  }}
+                  className="px-4 py-2 rounded-lg font-medium transition-colors text-sm bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/20 hover:border-red-500/40 cursor-pointer"
+                >
+                  Launch
                 </button>
               </div>
 

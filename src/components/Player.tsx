@@ -15,6 +15,13 @@ import { soundManager } from '../utils/soundManager';
 const SPEED = 12;
 const MAX_LASER_DIST = 100;
 
+// Pre-allocated temporary vectors to eliminate GC churn inside Player useFrame
+const _tempForward = new THREE.Vector3();
+const _tempRight = new THREE.Vector3();
+const _tempDirection = new THREE.Vector3();
+const _tempPushDir = new THREE.Vector3();
+const _tempPushImpulse = new THREE.Vector3();
+
 export function Player() {
   const body = useRef<RapierRigidBody>(null);
   const { camera } = useThree();
@@ -46,10 +53,12 @@ export function Player() {
   const keys = useRef({ 
     w: false, a: false, s: false, d: false,
     arrowup: false, arrowdown: false, arrowleft: false, arrowright: false,
-    c: false, shift: false
+    c: false, shift: false, f: false
   });
   const crouchHeightRef = useRef(1.6);
   const lastEmitTime = useRef(0);
+  const lastEmittedPos = useRef<[number, number, number]>([0, 0, 0]);
+  const lastEmittedRot = useRef<number>(0);
   const lastShootTime = useRef(0);
 
   const gunGroupRef = useRef<THREE.Group>(null);
@@ -62,6 +71,7 @@ export function Player() {
   const recoilOffset = useRef(0);
   const baseFov = useRef<number | null>(null);
   const stuckTimer = useRef(0);
+  const prevHardwareAim = useRef(false);
 
   // Tactical Dash Ability State
   const lastPressTimes = useRef<Record<string, number>>({ w: 0, a: 0, s: 0, d: 0 });
@@ -368,12 +378,12 @@ export function Player() {
     
     const k = keys.current;
     
-    const forward = new THREE.Vector3();
+    const forward = _tempForward;
     camera.getWorldDirection(forward);
     forward.y = 0;
     forward.normalize();
 
-    const right = new THREE.Vector3();
+    const right = _tempRight;
     right.crossVectors(forward, camera.up).normalize();
 
     // Combine keyboard and joystick input
@@ -421,7 +431,7 @@ export function Player() {
     const baseSpeed = leroyActive ? SPEED * 1.55 : SPEED;
     const currentSpeed = isCrouching ? baseSpeed * 0.45 : baseSpeed;
 
-    const direction = new THREE.Vector3();
+    const direction = _tempDirection.set(0, 0, 0);
     direction.addScaledVector(forward, combinedMoveZ);
     direction.addScaledVector(right, combinedMoveX);
     
@@ -439,7 +449,7 @@ export function Player() {
     if (hasInput && speedXZ < 0.25) {
       stuckTimer.current += delta;
       if (stuckTimer.current > 0.5) {
-        const pushDir = direction.clone();
+        const pushDir = _tempPushDir.copy(direction);
         if (pushDir.lengthSq() < 0.001) {
           pushDir.copy(forward);
           pushDir.y = 0;
@@ -450,7 +460,7 @@ export function Player() {
         pushDir.z += (Math.random() - 0.5) * 0.4;
         pushDir.normalize();
 
-        const pushImpulse = pushDir.multiplyScalar(3.5);
+        const pushImpulse = _tempPushImpulse.copy(pushDir).multiplyScalar(3.5);
         body.current.applyImpulse({ x: pushImpulse.x, y: pushImpulse.y, z: pushImpulse.z }, true);
         stuckTimer.current = 0;
       }
@@ -533,13 +543,32 @@ export function Player() {
       gunVisualRef.current.rotation.x = THREE.MathUtils.lerp(gunVisualRef.current.rotation.x, 0, delta * 15);
     }
 
-    // Emit position to server
+    // Sync hardware aim with store
+    const hardwareAim = isAiming.current || keys.current.f;
+    if (hardwareAim !== prevHardwareAim.current) {
+      useGameStore.setState({ isFocusAiming: hardwareAim });
+      prevHardwareAim.current = hardwareAim;
+    }
+
+    // Emit position to server only if moved/rotated, or as a 1Hz heartbeat
     const now = Date.now();
     if (now - lastEmitTime.current > 50) {
-      updatePlayerPosition([pos.x, pos.y, pos.z], camera.rotation.y);
-      useStore.getState().setLocalUserPosition([pos.x, pos.y, pos.z]);
-      useStore.getState().setLocalUserRotation([camera.rotation.x, camera.rotation.y, camera.rotation.z]);
-      lastEmitTime.current = now;
+      const distSq = 
+        Math.pow(pos.x - lastEmittedPos.current[0], 2) +
+        Math.pow(pos.y - lastEmittedPos.current[1], 2) +
+        Math.pow(pos.z - lastEmittedPos.current[2], 2);
+      const rotDiff = Math.abs(camera.rotation.y - lastEmittedRot.current);
+      const isHeartbeat = now - lastEmitTime.current > 1000;
+
+      if (distSq > 0.0001 || rotDiff > 0.001 || isHeartbeat) {
+        updatePlayerPosition([pos.x, pos.y, pos.z], camera.rotation.y);
+        useStore.getState().setLocalUserPosition([pos.x, pos.y, pos.z]);
+        useStore.getState().setLocalUserRotation([camera.rotation.x, camera.rotation.y, camera.rotation.z]);
+        
+        lastEmittedPos.current = [pos.x, pos.y, pos.z];
+        lastEmittedRot.current = camera.rotation.y;
+        lastEmitTime.current = now;
+      }
     }
   });
 
@@ -582,10 +611,12 @@ export function Player() {
   }, [gameState, playerState, camera, world, rapier, hitEnemy, addParticles, addLaser]);
 
   const mouseSensitivity = useStore(state => state.mouseSensitivity);
+  const isFocusAiming = useGameStore(state => state.isFocusAiming);
+  const pointerSpeed = isFocusAiming ? mouseSensitivity * 0.35 : mouseSensitivity;
 
   return (
     <>
-      {!isTouchDevice.current && !isSettingsOpen && !isRadialMenuOpen && <PointerLockControls pointerSpeed={mouseSensitivity} />}
+      {!isTouchDevice.current && !isSettingsOpen && !isRadialMenuOpen && <PointerLockControls pointerSpeed={pointerSpeed} />}
       <RigidBody
         ref={body}
         colliders={false}

@@ -112,7 +112,7 @@ export const Minimap = () => {
   if (!showMinimap) return null;
 
   return (
-    <div className="absolute bottom-4 left-4 z-10 bg-zinc-950/80 backdrop-blur-md rounded-full border-2 border-white/10 shadow-2xl overflow-hidden" style={{ width: radarSize, height: radarSize }}>
+    <div className="absolute bottom-4 left-4 z-50 bg-zinc-950/80 backdrop-blur-md rounded-full border-2 border-white/10 shadow-2xl overflow-hidden" style={{ width: radarSize, height: radarSize }}>
       {/* Radar Grid/Background */}
       <div className="absolute inset-0 rounded-full border border-emerald-500/20" />
       <div className="absolute inset-0 flex items-center justify-center">

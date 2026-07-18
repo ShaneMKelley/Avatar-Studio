@@ -11,6 +11,8 @@ export function isWebGPURendererActive(): boolean {
     if (preference) {
       return preference === 'webgpu' && typeof navigator !== 'undefined' && !!(navigator as any).gpu;
     }
+    // Default to WebGL for maximum compatibility in sandboxed development iframes
+    return false;
   }
   return false;
 }
@@ -35,8 +37,13 @@ export function createWebGPURenderer(params: any) {
       let isInitialized = false;
       let initErrorOccurred = false;
 
+      // Strict 1500ms timeout race for WebGPU async initialization to prevent hanging in sandboxed frames
+      const initTimeout = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("WebGPU initialization timed out (1.5s limit)")), 1500);
+      });
+
       // Ensure safe asynchronous initialization of WebGPU backend and device
-      renderer.init().then(() => {
+      Promise.race([renderer.init(), initTimeout]).then(() => {
         isInitialized = true;
         console.log("✅ WebGPURenderer async initialization completed successfully.");
 

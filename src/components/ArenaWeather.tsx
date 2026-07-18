@@ -7,11 +7,15 @@ import { useGameStore } from '../store';
 export const ArenaWeather: React.FC = () => {
   const weather = useStore(state => state.weather);
   const setWeather = useStore(state => state.setWeather);
+  const performanceMode = useStore(state => state.performanceMode);
   const { scene } = useThree();
 
   const particleCount = 1200;
   const pointsRef = useRef<THREE.Points>(null);
   const geometryRef = useRef<THREE.BufferGeometry>(null);
+
+  const activeCountRef = useRef(particleCount);
+  const frameTimesRef = useRef<number[]>([]);
 
   // Define weather sequence for periodic cycling
   const weatherCycleList: Array<'clear' | 'light_rain' | 'neon_fog' | 'solar_storm'> = [
@@ -65,6 +69,37 @@ export const ArenaWeather: React.FC = () => {
   // Update particles positions in real-time based on active weather type
   useFrame((state, delta) => {
     const elapsed = state.clock.getElapsedTime();
+    const deltaMs = delta * 1000;
+
+    // Track rolling frame times to detect load
+    frameTimesRef.current.push(deltaMs);
+    if (frameTimesRef.current.length > 45) {
+      frameTimesRef.current.shift();
+    }
+    const avgFrameTime = frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
+
+    // Dynamically scale down particle counts during high load or performance mode
+    let targetCount = particleCount;
+    if (performanceMode) {
+      targetCount = 200;
+    } else if (frameTimesRef.current.length >= 30) {
+      if (avgFrameTime > 30) {
+        targetCount = 100;
+      } else if (avgFrameTime > 20) {
+        targetCount = 300;
+      } else if (avgFrameTime > 16.6) {
+        targetCount = 600;
+      }
+    }
+
+    if (activeCountRef.current !== targetCount) {
+      activeCountRef.current = targetCount;
+      if (geometryRef.current) {
+        geometryRef.current.setDrawRange(0, targetCount);
+      }
+    }
+
+    const currentActiveCount = activeCountRef.current;
 
     // 1. Particle positions simulation
     if (pointsRef.current && geometryRef.current) {
@@ -72,7 +107,7 @@ export const ArenaWeather: React.FC = () => {
       if (positionAttr) {
         const positions = positionAttr.array as Float32Array;
 
-        for (let i = 0; i < particleCount; i++) {
+        for (let i = 0; i < currentActiveCount; i++) {
           const idx = i * 3;
           const individualSpeed = speeds[i];
 

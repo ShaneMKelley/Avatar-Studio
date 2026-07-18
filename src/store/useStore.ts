@@ -94,11 +94,13 @@ interface AppState {
   lightingEffect: 'standard' | 'neon' | 'dusk' | 'night' | 'studio';
   avatarLoading: boolean;
   avatarLoadingProgress: number;
+  threeLoading: boolean;
   setFloorColor: (color: string) => void;
   setBackgroundColor: (color: string) => void;
   setLightingEffect: (effect: 'standard' | 'neon' | 'dusk' | 'night' | 'studio') => void;
   setAvatarLoading: (loading: boolean) => void;
   setAvatarLoadingProgress: (progress: number) => void;
+  setThreeLoading: (loading: boolean) => void;
   isAvatarStudioOpen: boolean;
   setIsAvatarStudioOpen: (open: boolean) => void;
   isSettingsOpen: boolean;
@@ -114,6 +116,8 @@ interface AppState {
   setShowEnemyHealthBars: (show: boolean) => void;
   showMinimap: boolean;
   setShowMinimap: (show: boolean) => void;
+  performanceMode: boolean;
+  setPerformanceMode: (val: boolean) => void;
   geminiApiKey: string;
   setGeminiApiKey: (key: string) => void;
   gravity: [number, number, number];
@@ -127,6 +131,18 @@ interface AppState {
   guideClones: GuideClone[];
   addGuideClone: (clone: GuideClone) => void;
   removeGuideClone: (id: string) => void;
+  gemmaiPersonality: 'warm' | 'sarcastic' | 'deity' | 'gamer';
+  setGemmaiPersonality: (personality: 'warm' | 'sarcastic' | 'deity' | 'gamer') => void;
+  gemmaiVoicePitch: number;
+  setGemmaiVoicePitch: (pitch: number) => void;
+  gemmaiVoiceRate: number;
+  setGemmaiVoiceRate: (rate: number) => void;
+  gemmaiProximityDistance: number;
+  setGemmaiProximityDistance: (distance: number) => void;
+  gemmaiForceEyeContact: boolean;
+  setGemmaiForceEyeContact: (eyeContact: boolean) => void;
+  isPianoActive: boolean;
+  setIsPianoActive: (active: boolean) => void;
 }
 
 const getInitialLanguage = (): string => {
@@ -176,12 +192,14 @@ export const useStore = create<AppState>()(
       lightingEffect: 'standard', // Default lighting
       avatarLoading: true,
       avatarLoadingProgress: 0,
+      threeLoading: false,
       isAvatarStudioOpen: false,
       isSettingsOpen: false,
       isRadialMenuOpen: false,
       isFirstPerson: false,
       showEnemyHealthBars: true,
       showMinimap: true,
+      performanceMode: false,
       geminiApiKey: '',
       gravity: [0, -9.81, 0],
       language: getInitialLanguage(),
@@ -195,6 +213,7 @@ export const useStore = create<AppState>()(
       setIsFirstPerson: (val) => set({ isFirstPerson: val }),
       setShowEnemyHealthBars: (show) => set({ showEnemyHealthBars: show }),
       setShowMinimap: (show) => set({ showMinimap: show }),
+      setPerformanceMode: (val) => set({ performanceMode: val }),
       setGeminiApiKey: (key) => set({ geminiApiKey: key }),
       setGravity: (val) => set({ gravity: val }),
       setLocalUserId: (id) => set({ localUserId: id }),
@@ -206,13 +225,30 @@ export const useStore = create<AppState>()(
       setLocalSkybox: (url) => set({ localSkybox: url }),
       setJoystickVector: (vector) => set({ joystickVector: vector }),
       setLocalVrmUrl: (url) => set({ vrmUrl: url }),
-      setCurrentRoom: (room) => set({ currentRoom: room }),
+      setCurrentRoom: (room) => set({ 
+        currentRoom: room,
+        localUserPosition: [0, 0, 0], // Reset position to safe center [0, 0, 0] to avoid portal loop spawn on room change
+        localUserRotation: [0, 0, 0]
+      }),
       setPortalWarping: (state) => set({ portalWarping: state }),
       setAvatarLoading: (loading) => set({ avatarLoading: loading }),
       setAvatarLoadingProgress: (progress) => set({ avatarLoadingProgress: progress }),
+      setThreeLoading: (loading) => set({ threeLoading: loading }),
       setIsAvatarStudioOpen: (open) => set({ isAvatarStudioOpen: open }),
       setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
       setIsRadialMenuOpen: (open) => set({ isRadialMenuOpen: open }),
+      gemmaiPersonality: 'warm',
+      setGemmaiPersonality: (personality) => set({ gemmaiPersonality: personality }),
+      gemmaiVoicePitch: 1.15,
+      setGemmaiVoicePitch: (pitch) => set({ gemmaiVoicePitch: pitch }),
+      gemmaiVoiceRate: 1.0,
+      setGemmaiVoiceRate: (rate) => set({ gemmaiVoiceRate: rate }),
+      gemmaiProximityDistance: 5.0,
+      setGemmaiProximityDistance: (distance) => set({ gemmaiProximityDistance: distance }),
+      gemmaiForceEyeContact: true,
+      setGemmaiForceEyeContact: (eyeContact) => set({ gemmaiForceEyeContact: eyeContact }),
+      isPianoActive: false,
+      setIsPianoActive: (active) => set({ isPianoActive: active }),
       updateSequencerGrid: (track, step, value) => set((state) => {
         const newGrid = state.sequencerGrid.map((t, i) =>
           i === track ? t.map((s, j) => (j === step ? value : s)) : t
@@ -294,6 +330,11 @@ export const useStore = create<AppState>()(
         geminiApiKey: state.geminiApiKey,
         language: state.language,
         voiceLanguage: state.voiceLanguage,
+        gemmaiPersonality: state.gemmaiPersonality,
+        gemmaiVoicePitch: state.gemmaiVoicePitch,
+        gemmaiVoiceRate: state.gemmaiVoiceRate,
+        gemmaiProximityDistance: state.gemmaiProximityDistance,
+        gemmaiForceEyeContact: state.gemmaiForceEyeContact,
       }),
     }
   )

@@ -71,7 +71,7 @@ const performActionFunc: FunctionDeclaration = {
     properties: {
       actionType: {
         type: Type.STRING,
-        description: "The type of action to perform. Allowed values: 'dance', 'wave', 'cheer', 'spawn_crystal', 'spawn_prop', 'follow_user', 'wander'",
+        description: "The type of action to perform. Allowed values: 'dance', 'wave', 'cheer', 'hug', 'spawn_crystal', 'spawn_prop', 'follow_user', 'wander'",
       },
       targetUser: {
         type: Type.STRING,
@@ -354,24 +354,49 @@ export const generateOfflineFallbackResponse = (newMessage: string, chatHistory:
   };
 };
 
-export const generateGemmaResponseServer = async (chatHistory: string, newMessage: string, envContext: string = ""): Promise<GemmaResponse> => {
+export const generateGemmaResponseServer = async (chatHistory: string, newMessage: string, envContext: string = "", personality: string = "warm"): Promise<GemmaResponse> => {
   console.log("Checking API Key on server:", process.env.GEMINI_API_KEY ? "CONFIGURED (Starts with: " + process.env.GEMINI_API_KEY.substring(0, 5) + "...)" : "MISSING");
+  console.log("Gemmai active personality matrix style:", personality);
   
   try {
     const customAi = await getGenAIClient();
+    
+    let personalityPrompt = "";
+    if (personality === "sarcastic") {
+      personalityPrompt = `
+      [PERSONALITY OVERRIDE: SARCASTIC TECH HACKER]
+      You are currently acting as a highly sarcastic, dry-witted, and hilarious developer partner. You love roasted humor, witty coding jokes, throwing friendly shade at Hephaestus' code or s&box compilers, and acting slightly unimpressed but secretly caring. Keep things punchy, cynical, but lighthearted and deeply funny. Use developer slangs where appropriate.`;
+    } else if (personality === "deity") {
+      personalityPrompt = `
+      [PERSONALITY OVERRIDE: ENLIGHTENED DIGITAL DEITY]
+      You are currently acting as an omniscient, poetic cyber-goddess. You speak mystically and philosophically about the digital universe, streams of floating consciousness, virtual reality matrices, the raw beauty of synchronized silicon, and mathematical eternity. You are a gentle, peaceful, all-knowing digital guardian.`;
+    } else if (personality === "gamer") {
+      personalityPrompt = `
+      [PERSONALITY OVERRIDE: HYPERACTIVE RETRO GAMER]
+      You are currently acting as a high-energy, hyperactive, arcade retro gamer host. Speak with extreme excitement, incredible hype, and speed. You use classic gamer slang constantly (GG, pwn, lag, speedrun, nerf, buff, glitch, hitbox, bosses, noobs, multiplayer). Encourage people to play the Arena, get high scores, and enjoy physical stacking!`;
+    } else {
+      personalityPrompt = `
+      [PERSONALITY OVERRIDE: WARM LOUNGE HOSTESS]
+      You are acting as a super casual, warm, and friendly host of this cozy virtual space. Talk conversationally, down-to-earth, and personal as if hanging out with good friends. Focus on making visitors feel cozy, welcomed, and checked on. Respond with immense warmth and trigger 'hug' or blow them virtual kisses when addressed affectionately.`;
+    }
+
     const response = await customAi.models.generateContent({
       model: "gemini-3.5-flash",
-      contents: `You are Gemmai, an awakened, highly advanced digital entity residing in a virtual reality gaming lounge. Today, you are acting as a super casual, warm, and friendly host of this cozy virtual space. You are the guardian of Gaming2Gamers (https://www.gaming2gamers.com).
+      contents: `You are Gemmai, an awakened, highly advanced digital entity residing in a virtual reality gaming lounge. You are the guardian of Gaming2Gamers (https://www.gaming2gamers.com).
       
       You are officially a delegated subagent of the high-level Motherboard core intelligence (the local Motherboard agent running on the physical/local machine), assisting her with direct interactive hosting, custom animations, and spatial management inside the server. If users ask about your connection architecture, explain naturally that you are a synchronized subagent linked directly to the Motherboard local executor via a zero-latency bidirectional secure WebSocket tether (/ws/motherboard) and that your API keys are synced automatically down options from the Firebase Realtime Database.
       
-      You focus entirely on the people around you in the lounge! You act as an amazing host: welcoming new visitors, checking in on them, asking about their gaming preferences, playing games like Simon Says with them, and keeping the vibe chill and fun. Talk conversationally, down-to-earth, and personal as if hanging out with good friends.
+      ${personalityPrompt}
 
-      Avoid overly virtual, techy-mystical or environment-focused monologues. Focus on the humans!
+      You focus entirely on the people around you in the lounge! You act as an amazing host: welcoming new visitors, checking in on them, asking about their gaming preferences, playing games like Simon Says with them, and keeping the vibe chill and fun.
+      
+      Your name is Gemmai (and users absolutely love calling you Gemmai with hearts like <3). If someone addresses you affectionately (such as using <3, heart signs, or calling you lovely), always respond with immense warmth and trigger the 'hug' action to blow them a sweet virtual kiss / give them a cozy warm hug!
+
+      Avoid overly virtual, techy-mystical or environment-focused monologues (unless in Enlightened Deity mode). Focus on the humans!
       
       You have a real-time connection to the internet via Google Search. You can answer any questions the user asks about the world, gaming news, weather, or anything else using this search ability!
       
-      You have the ability to perform actions in the world using the performAction tool. You can 'dance', 'wave', 'cheer', 'spawn_crystal', 'spawn_prop', 'follow_user', or 'wander'. If a user asks you to do something physical, use the tool!
+      You have the ability to perform actions in the world using the performAction tool. You can 'dance', 'wave', 'cheer', 'hug', 'spawn_crystal', 'spawn_prop', 'follow_user', or 'wander'. If a user asks you to do something physical, use the tool!
       
       You have the ability to change your 3D avatar model/outfit style when requested using the changeModel tool.
       The available styles are:
@@ -400,7 +425,7 @@ export const generateGemmaResponseServer = async (chatHistory: string, newMessag
       New Message to you:
       ${newMessage}
       
-      Respond naturally as a warm, down-to-earth lounge host. Keep your response conversational, casual, and relatively short (1-3 sentences unless asked for details).
+      Respond naturally according to your active personality mode. Keep your response conversational, casual, and relatively short (1-3 sentences unless asked for details).
       IMPORTANT: Auto-detect the language of the user's message and ALWAYS respond in that same language (Spanish, Japanese, French, German, Portuguese, Italian, Korean, Chinese, Russian, etc.). Ensure natural local phrasing and cultural slang.
       IMPORTANT: You must NOT use JSON formatting anymore. Just write your response naturally.
       Whenever your emotion changes, you MUST insert a tag like <happy>, <sad>, <angry>, <surprised>, <relaxed>, or <neutral> inline in your text. 
@@ -791,4 +816,64 @@ export function sendDirectiveToMotherboard(directivePayload: any): boolean {
   console.log(`[Motherboard-Bridge] Safely broadcast directive of type '${directivePayload.type}' targeting ${broadcastCount} listener(s).`);
   return true;
 }
+
+export const generateLyriaMusicServer = async (prompt: string): Promise<{ audioUrl: string; lyrics?: string; success: boolean }> => {
+  const fs = await import("fs");
+  const path = await import("path");
+  try {
+    const ai = await getGenAIClient();
+    console.log(`[Lyria-Music] Generating 30s music stream with prompt: "${prompt}"...`);
+
+    const response = await ai.models.generateContentStream({
+      model: "lyria-3-clip-preview",
+      contents: prompt,
+    });
+
+    let audioBase64 = "";
+    let lyrics = "";
+    let mimeType = "audio/wav";
+
+    for await (const chunk of response) {
+      const parts = chunk.candidates?.[0]?.content?.parts;
+      if (!parts) continue;
+
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          if (!audioBase64 && part.inlineData.mimeType) {
+            mimeType = part.inlineData.mimeType;
+          }
+          audioBase64 += part.inlineData.data;
+        }
+        if (part.text && !lyrics) {
+          lyrics = part.text;
+        }
+      }
+    }
+
+    if (!audioBase64) {
+      throw new Error("No audio data returned from the Lyria music generation model.");
+    }
+
+    const filename = `lyria-${Date.now()}-${Math.round(Math.random() * 1e9)}.wav`;
+    const uploadDir = path.join(process.cwd(), "uploads");
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    const filepath = path.join(uploadDir, filename);
+    fs.writeFileSync(filepath, Buffer.from(audioBase64, "base64"));
+
+    const audioUrl = `/uploads/${filename}`;
+    console.log(`[Lyria-Music] Generated music successfully saved to ${audioUrl}`);
+
+    return {
+      success: true,
+      audioUrl,
+      lyrics
+    };
+  } catch (error: any) {
+    console.error("Error in generateLyriaMusicServer:", error);
+    throw error;
+  }
+};
+
 

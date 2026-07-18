@@ -6,17 +6,19 @@ import * as THREE from 'three';
 import { RigidBody, CylinderCollider } from '@react-three/rapier';
 import { ArenaWeather } from './ArenaWeather';
 import { soundManager } from '../utils/soundManager';
+import { Pond } from './Pond';
 
 interface FoliageCollidersProps {
   matrices: THREE.Matrix4[];
   halfHeight: number;
   radius: number;
+  plantType: 'palm' | 'vinetree' | 'fern' | 'mushrooms' | 'crystal' | 'succulent';
 }
 
 // React.memo is used here for peak low-latency optimization.
 // The raw matrices never change after initialization, so these 
 // static colliders will render exactly once and perform zero re-renders.
-const FoliageColliders = React.memo(({ matrices, halfHeight, radius }: FoliageCollidersProps) => {
+const FoliageColliders = React.memo(({ matrices, halfHeight, radius, plantType }: FoliageCollidersProps) => {
   return (
     <group>
       {matrices.map((matrix, idx) => {
@@ -25,16 +27,50 @@ const FoliageColliders = React.memo(({ matrices, halfHeight, radius }: FoliageCo
         const scale = new THREE.Vector3();
         matrix.decompose(position, rotation, scale);
         const euler = new THREE.Euler().setFromQuaternion(rotation);
+
+        // Calculate exact physical dimensions based on instance scale
+        const scaledHalfHeight = halfHeight * scale.y;
+        const scaledRadius = radius * scale.x;
+
         return (
           <RigidBody
             key={idx}
             type="fixed"
             position={position}
             rotation={[euler.x, euler.y, euler.z]}
-            scale={scale}
             colliders={false}
           >
-            <CylinderCollider args={[halfHeight, radius]} position={[0, halfHeight, 0]} />
+            {/* Trunk / Base main pillar collider */}
+            <CylinderCollider args={[scaledHalfHeight, scaledRadius]} position={[0, scaledHalfHeight, 0]} />
+
+            {/* Custom solid canopy / top leaves colliders so players can jump and stand on top of them! */}
+            {plantType === 'palm' && (
+              <CylinderCollider 
+                args={[0.08 * scale.y, 1.85 * scale.x]} 
+                position={[0, 2 * scaledHalfHeight - 0.1 * scale.y, 0]} 
+              />
+            )}
+
+            {plantType === 'vinetree' && (
+              <CylinderCollider 
+                args={[0.1 * scale.y, 1.55 * scale.x]} 
+                position={[0, 2 * scaledHalfHeight - 0.1 * scale.y, 0]} 
+              />
+            )}
+
+            {plantType === 'fern' && (
+              <CylinderCollider 
+                args={[0.15 * scale.y, 1.5 * scaledRadius]} 
+                position={[0, scaledHalfHeight * 1.25, 0]} 
+              />
+            )}
+
+            {plantType === 'succulent' && (
+              <CylinderCollider 
+                args={[0.15 * scale.y, 1.5 * scaledRadius]} 
+                position={[0, scaledHalfHeight * 1.35, 0]} 
+              />
+            )}
           </RigidBody>
         );
       })}
@@ -230,12 +266,15 @@ export function SynthGarden() {
       ))}
 
       {/* Static Physical Colliders for All Lush Foliage */}
-      <FoliageColliders matrices={palmMatrices} halfHeight={2.5} radius={0.12} />
-      <FoliageColliders matrices={vinetreeMatrices} halfHeight={2.5} radius={0.14} />
-      <FoliageColliders matrices={fernMatrices} halfHeight={0.5} radius={0.4} />
-      <FoliageColliders matrices={mushroomsMatrices} halfHeight={0.4} radius={0.25} />
-      <FoliageColliders matrices={crystalMatrices} halfHeight={0.6} radius={0.35} />
-      <FoliageColliders matrices={succulentMatrices} halfHeight={0.5} radius={0.5} />
+      <FoliageColliders matrices={palmMatrices} halfHeight={2.5} radius={0.12} plantType="palm" />
+      <FoliageColliders matrices={vinetreeMatrices} halfHeight={2.5} radius={0.14} plantType="vinetree" />
+      <FoliageColliders matrices={fernMatrices} halfHeight={0.5} radius={0.4} plantType="fern" />
+      <FoliageColliders matrices={mushroomsMatrices} halfHeight={0.4} radius={0.25} plantType="mushrooms" />
+      <FoliageColliders matrices={crystalMatrices} halfHeight={0.6} radius={0.35} plantType="crystal" />
+      <FoliageColliders matrices={succulentMatrices} halfHeight={0.5} radius={0.5} plantType="succulent" />
+
+      {/* Central Interactive Cyber Pond */}
+      <Pond />
 
       {/* Bioluminescent organic ambient lighting for Synth Garden */}
       <pointLight position={[-15, 4, -15]} color="#22c55e" intensity={4} distance={35} decay={2} />
@@ -258,12 +297,13 @@ function generateMatrices(count: number, range: number, scaleMin = 0.8, scaleMax
     let x = (Math.random() - 0.5) * range * 2;
     let z = (Math.random() - 0.5) * range * 2;
     
-    // Keep spawn point area somewhat open so player is not wedged in meshes
+    // Keep spawn point area (0,0) and cyber-pond area (0,-12) clear of random dense foliage meshes
     const distFromCenter = Math.sqrt(x * x + z * z);
-    if (distFromCenter < 5.0) {
+    const distFromPond = Math.sqrt(x * x + (z + 12.0) * (z + 12.0));
+    if (distFromCenter < 5.0 || distFromPond < 8.0) {
       const angle = Math.random() * Math.PI * 2;
-      x += Math.cos(angle) * 6.0;
-      z += Math.sin(angle) * 6.0;
+      x = Math.cos(angle) * 14.0;
+      z = -12.0 + Math.sin(angle) * 14.0;
     }
 
     const y = 0; // Grounded on the floor plane (y=0)

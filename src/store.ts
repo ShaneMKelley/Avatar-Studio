@@ -77,6 +77,14 @@ export interface DamageText {
   isCritical: boolean;
 }
 
+export interface KillFeedItem {
+  id: string;
+  killerName: string;
+  victimName: string;
+  weaponType: 'laser' | 'rocket' | 'slash' | 'malfunction' | 'unknown';
+  timestamp: number;
+}
+
 interface GameStore {
   gameState: GameState;
   score: number;
@@ -97,14 +105,23 @@ interface GameStore {
   lastDefeatTime: number;
   addMatchLog: (type: MatchLog['type'], message: string) => void;
 
+  // Kill Feed System
+  killFeed: KillFeedItem[];
+  addKillFeedItem: (killerName: string, victimName: string, weaponType: KillFeedItem['weaponType']) => void;
+
   // Floating Damage Indicators
   damageTexts: DamageText[];
   addDamageText: (text: string, position: [number, number, number], isCritical: boolean, color: string) => void;
+  combatDamageHistory: { timestamp: number; dealt: number; received: number }[];
 
   // Tactical Dash Ability State
   dashCooldown: number; // in ms
   dashMaxCooldown: number; // in ms
   isDashing: boolean;
+
+  // Focus Aim Mode State
+  isFocusAiming: boolean;
+  setIsFocusAiming: (val: boolean) => void;
 
   // Combo Systems
   comboCount: number;
@@ -251,18 +268,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
   survivorStreak: 0,
   multiKillCount: 0,
   lastDefeatTime: 0,
-  addMatchLog: (type, message) => set((state) => ({
-    matchLogs: [...state.matchLogs, { id: Math.random().toString(), type, message, timestamp: Date.now() }].slice(-24)
+  addMatchLog: (type, message) => {
+    soundManager.triggerLogDucking();
+    set((state) => ({
+      matchLogs: [...state.matchLogs, { id: Math.random().toString(), type, message, timestamp: Date.now() }].slice(-24)
+    }));
+  },
+
+  killFeed: [],
+  addKillFeedItem: (killerName, victimName, weaponType) => set((state) => ({
+    killFeed: [
+      ...state.killFeed,
+      { id: Math.random().toString(), killerName, victimName, weaponType, timestamp: Date.now() }
+    ].slice(-10)
   })),
 
   damageTexts: [],
   addDamageText: (text, position, isCritical, color) => set((state) => ({
     damageTexts: [...(state.damageTexts || []), { id: Math.random().toString(), text, position, isCritical, color, timestamp: Date.now() }].slice(-39)
   })),
+  combatDamageHistory: [],
 
   dashCooldown: 0,
   dashMaxCooldown: 3000,
   isDashing: false,
+
+  isFocusAiming: false,
+  setIsFocusAiming: (val) => set({ isFocusAiming: val }),
   comboCount: 0,
   comboMultiplier: 1.0,
   lastHitTimeMs: 0,
@@ -601,11 +633,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
         newRechargingAmmo = false;
       }
     } else {
-      // Passive refill if player hasn't fired in the last 600ms
+      // Passive refill if player hasn't fired in the last 5000ms (5 seconds)
       const now = Date.now();
       const lastShoot = state.lastShootTimeMs || 0;
-      if (now - lastShoot > 600) {
-        newAmmo = Math.min(100, newAmmo + delta * 60);
+      if (now - lastShoot > 5000) {
+        // Slowly refilling 1 ammo cell per second (which is 10% capacity per second)
+        newAmmo = Math.min(100, newAmmo + delta * 10);
       }
     }
 
@@ -654,7 +687,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
         playerHealth: 100,
         score: Math.max(0, state.score - 100),
         survivorStreak: 0,
-        events: [...state.events, { id: Math.random().toString(), message: `❌ SYSTEM FAILURE: Player neutralized! Vitals reached zero!`, timestamp: Date.now() }]
+        killFeed: [
+          ...(state.killFeed || []),
+          {
+            id: Math.random().toString(),
+            killerName: "AI Swarm",
+            victimName: useStore.getState().localUserName || 'Player',
+            weaponType: 'malfunction' as const,
+            timestamp: Date.now()
+          }
+        ].slice(-10),
+        events: [...state.events, { id: Math.random().toString(), message: `❌ SYSTEM FAILURE: Player neutralized! Vitals reached zero!`, timestamp: Date.now() }],
+        combatDamageHistory: [...(state.combatDamageHistory || []), { timestamp: Date.now(), dealt: 0, received: damage }].filter(item => Date.now() - item.timestamp <= 30000)
       };
     }
 
@@ -664,7 +708,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       playerDisabledUntil: Date.now() + 1000, // 1s cooldown invulnerability
       score: Math.max(0, state.score - 20),
       survivorStreak: 0,
-      events: [...state.events, { id: Math.random().toString(), message: `💥 DAMAGE TAKEN: Took -${damage} HP from enemy fire! Vitals at ${newHealth}%`, timestamp: Date.now() }]
+      events: [...state.events, { id: Math.random().toString(), message: `💥 DAMAGE TAKEN: Took -${damage} HP from enemy fire! Vitals at ${newHealth}%`, timestamp: Date.now() }],
+      combatDamageHistory: [...(state.combatDamageHistory || []), { timestamp: Date.now(), dealt: 0, received: damage }].filter(item => Date.now() - item.timestamp <= 30000)
     };
   }),
 
@@ -718,6 +763,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
         comboCount = 1;
       }
       lastHitTimeMs = now;
+      if (comboCount > 1) {
+        soundManager.playComboMilestone(comboCount);
+      }
     }
     
     const comboMultiplier = 1.0 + Math.min(1.0, (comboCount - 1) * 0.1); // max 2.0x modifier (at 11 hits)
@@ -766,7 +814,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const rawMaxHp = targetEnemy?.maxHealth ?? (isInf ? 3.6 : isBomb ? 9.0 : isOver ? 6.0 : isOp ? 4.8 : isDrone ? 2.4 : 6.0);
     
     let hitMessage = '';
+    let nextKillFeed = [...(state.killFeed || [])];
     if (enemyDefeated) {
+      const killer = useStore.getState().localUserName || 'Player';
+      const victim = `${enemyTypeName} ${id.replace('bot-', '#')}`;
+      const weapon: 'laser' | 'rocket' = isWeakpointHit ? 'rocket' : 'laser';
+      nextKillFeed.push({
+        id: Math.random().toString(),
+        killerName: killer,
+        victimName: victim,
+        weaponType: weapon,
+        timestamp: Date.now()
+      });
+
       if (isWeakpointHit) {
         hitMessage = `💥 CRITICAL CORE BREAKPOINT on Bombardier ${id.replace('bot-', '#')}! (+300 pts)`;
       } else if (isOverWeakpointHit) {
@@ -805,6 +865,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
                 timestamp: Date.now()
               });
               
+              nextKillFeed.push({
+                id: Math.random().toString(),
+                killerName: "Blast Wave",
+                victimName: `${r_name} ${e.id.replace('bot-', '#')}`,
+                weaponType: 'rocket' as const,
+                timestamp: Date.now()
+              });
+
               if (byPlayer) {
                 extraScore += 300;
               }
@@ -881,6 +949,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
           companionEvents.push({
             id: Math.random().toString(),
             message: `📡 OPERATOR SHOT DOWN: Support Drone signal crashed!`,
+            timestamp: Date.now()
+          });
+          nextKillFeed.push({
+            id: Math.random().toString(),
+            killerName: "Signal Loss",
+            victimName: `Support Drone ${droneId.replace('bot-', '#')}`,
+            weaponType: 'malfunction' as const,
             timestamp: Date.now()
           });
           return {
@@ -1010,11 +1085,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }, 100);
     }
 
+    const nextCombatHistory = byPlayer 
+      ? [...(state.combatDamageHistory || []), { timestamp: Date.now(), dealt: actualDamage, received: 0 }].filter(item => Date.now() - item.timestamp <= 30000)
+      : (state.combatDamageHistory || []);
+
     return {
       enemies,
       score: nextScore,
       events: compiledEvents,
       matchLogs: extraMatchLogs.slice(-24),
+      killFeed: nextKillFeed.slice(-10),
       firstBloodTriggered: nextFirstBlood,
       survivorStreak: nextSurvivorStreak,
       multiKillCount: nextMultiKillCount,
@@ -1023,7 +1103,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       hitStopActive: byPlayer,
       comboCount,
       comboMultiplier,
-      lastHitTimeMs
+      lastHitTimeMs,
+      combatDamageHistory: nextCombatHistory
     };
   }),
 

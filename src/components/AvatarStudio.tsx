@@ -472,18 +472,32 @@ export const AvatarStudio: React.FC = () => {
               
               {!vroidToken ? (
                 <button
-                  onClick={() => {
-                    window.open('/auth/vroid', 'vroid_auth', 'width=600,height=800');
-                    
-                    const handleMessage = async (event: MessageEvent) => {
-                      if (event.data?.type === 'VROID_AUTH_SUCCESS') {
-                        window.removeEventListener('message', handleMessage);
-                        const token = event.data.access_token;
-                        localStorage.setItem('vroid_token', token);
-                        setVroidToken(token);
+                  onClick={async () => {
+                    try {
+                      const res = await fetch('/api/vroid/auth-url');
+                      if (!res.ok) {
+                        const errorData = await res.json().catch(() => ({}));
+                        throw new Error(errorData.error || 'Failed to initiate authentication session.');
                       }
-                    };
-                    window.addEventListener('message', handleMessage);
+                      const { url } = await res.json();
+                      const popup = window.open(url, 'vroid_auth', 'width=600,height=800');
+                      if (!popup) {
+                        alert('Please allow popups to connect your VRoid Hub account.');
+                        return;
+                      }
+
+                      const handleMessage = async (event: MessageEvent) => {
+                        if (event.data?.type === 'VROID_AUTH_SUCCESS') {
+                          window.removeEventListener('message', handleMessage);
+                          const token = event.data.access_token;
+                          localStorage.setItem('vroid_token', token);
+                          setVroidToken(token);
+                        }
+                      };
+                      window.addEventListener('message', handleMessage);
+                    } catch (err: any) {
+                      alert('Error initiating VRoid Hub connection: ' + err.message);
+                    }
                   }}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-xl transition-colors"
                  >

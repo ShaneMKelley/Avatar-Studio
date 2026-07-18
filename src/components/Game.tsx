@@ -15,7 +15,7 @@ import { createWebGPURenderer } from '../utils/renderer';
 import { WebGPUSceneSanitizer } from './WebGPUSceneSanitizer';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useShallow } from 'zustand/react/shallow';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => {
@@ -42,12 +42,17 @@ function GameLoop() {
   const updateTime = useGameStore(state => state.updateTime);
   const updateEnemies = useGameStore(state => state.updateEnemies);
   const cleanupEffects = useGameStore(state => state.cleanupEffects);
+  const lastThrottleTime = useRef(0);
 
   useFrame((_, delta) => {
     const now = Date.now();
     updateTime(delta);
-    updateEnemies(now);
-    cleanupEffects(now);
+    
+    if (now - lastThrottleTime.current > 100) {
+      updateEnemies(now);
+      cleanupEffects(now);
+      lastThrottleTime.current = now;
+    }
   });
   return null;
 }

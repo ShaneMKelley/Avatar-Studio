@@ -11,6 +11,10 @@ import { useGameStore } from '../store';
 import { Text } from '@react-three/drei';
 import { ArenaAvatar } from './ArenaAvatar';
 
+// Pre-allocated temporary vectors to eliminate GC churn in render frame loops
+const _tempTargetPos = new THREE.Vector3();
+const _tempCurrentPos = new THREE.Vector3();
+
 export function OtherPlayer({ id }: { id: string }) {
   const data = useGameStore(state => state.otherPlayers[id]);
   const body = useRef<RapierRigidBody>(null);
@@ -23,18 +27,18 @@ export function OtherPlayer({ id }: { id: string }) {
     
     // Smoothly interpolate position
     const currentPos = body.current.translation();
-    const targetPos = new THREE.Vector3(...data.position);
+    _tempTargetPos.set(data.position[0], data.position[1], data.position[2]);
     
     // Calculate speed for animation
-    const dist = targetPos.distanceTo(lastPosRef.current);
+    const dist = _tempTargetPos.distanceTo(lastPosRef.current);
     speedRef.current = dist / (delta || 0.016);
-    lastPosRef.current.copy(targetPos);
+    lastPosRef.current.copy(_tempTargetPos);
 
     // Frame-rate independent lerp
     const lerpFactor = 1.0 - Math.exp(-20 * delta);
-    const newPos = new THREE.Vector3(currentPos.x, currentPos.y, currentPos.z).lerp(targetPos, lerpFactor);
+    _tempCurrentPos.set(currentPos.x, currentPos.y, currentPos.z).lerp(_tempTargetPos, lerpFactor);
     
-    body.current.setNextKinematicTranslation({ x: newPos.x, y: newPos.y, z: newPos.z });
+    body.current.setNextKinematicTranslation({ x: _tempCurrentPos.x, y: _tempCurrentPos.y, z: _tempCurrentPos.z });
 
     // Smoothly interpolate rotation
     if (groupRef.current) {

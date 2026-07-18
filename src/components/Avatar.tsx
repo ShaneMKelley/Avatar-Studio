@@ -26,6 +26,7 @@ import { useKeyboard } from "../hooks/useKeyboard";
 import { useVoiceBones } from "../hooks/useVoiceBones";
 import { solveTwoBoneIK } from "../utils/ik";
 import { convertVRMMaterialsForWebGPU, isWebGPURendererActive } from "../utils/renderer";
+import { loadVrmaWithCache } from "../utils/vrmaCache";
 
 import { SignatureHugEffect } from "./SignatureHugEffect";
 
@@ -755,9 +756,8 @@ const ChatBubble = ({ userId }: { userId: string }) => {
     <Html
       position={[0, 4.2, 0]}
       center
-      transform
-      sprite
-      zIndexRange={[100, 0]}
+      distanceFactor={15}
+      zIndexRange={[9, 0]}
       style={{ pointerEvents: "none" }}
     >
       <div className="bg-white/95 backdrop-blur-md text-zinc-900 px-4 py-2 rounded-2xl shadow-xl text-sm max-w-[350px] text-left border border-white/50 relative break-words">
@@ -838,8 +838,9 @@ export const Avatar: React.FC<AvatarProps> = ({
 
   const remoteStream = useStore((state) => state.users[userId]?.stream);
   const masterVolume = useStore((state) => state.masterVolume);
+  const isPianoActive = useStore((state) => state.isPianoActive);
 
-  const keys = useKeyboard(isLocal);
+  const keys = useKeyboard(isLocal && !isPianoActive);
 
   // Subscribe to store updates for this remote user's position/rotation/vrmUrl
   const storeUser = useStore((state) => state.users[userId]);
@@ -920,6 +921,16 @@ export const Avatar: React.FC<AvatarProps> = ({
   useEffect(() => {
     let isMounted = true;
     let currentVrm: VRM | null = null;
+    
+    if (isLocal) {
+      setTimeout(() => {
+        if (isMounted) {
+          setAvatarLoading(true);
+          setAvatarLoadingProgress(0);
+        }
+      }, 0);
+    }
+
     const loader = new GLTFLoader();
     loader.register((parser) => {
       return new VRMLoaderPlugin(parser, {
@@ -945,9 +956,19 @@ export const Avatar: React.FC<AvatarProps> = ({
         // Run high-fidelity compatibility transcode for WebGPU Materials
         convertVRMMaterialsForWebGPU(loadedVrm.scene);
 
-        // Disable frustum culling for VRM
+        // Enable high-performance frustum culling for VRM with generous bounding spheres
         loadedVrm.scene.traverse((obj) => {
-          obj.frustumCulled = false;
+          if (obj instanceof THREE.Mesh) {
+            obj.frustumCulled = true;
+            if (obj.geometry) {
+              if (!obj.geometry.boundingSphere) {
+                obj.geometry.computeBoundingSphere();
+              }
+              if (obj.geometry.boundingSphere) {
+                obj.geometry.boundingSphere.radius = Math.max(obj.geometry.boundingSphere.radius, 2.0);
+              }
+            }
+          }
         });
 
         // Refine Physics (Jiggle)
@@ -1094,12 +1115,9 @@ export const Avatar: React.FC<AvatarProps> = ({
 
         // --- Load VRM Animations ---
         mixerRef.current = new THREE.AnimationMixer(loadedVrm.scene);
-        const vrmaLoader = new GLTFLoader();
-        vrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
-        vrmaLoader.load(
-          "/animations/waving.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/waving.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -1114,14 +1132,11 @@ export const Avatar: React.FC<AvatarProps> = ({
             } catch (pErr) {
               console.warn("Error parsing waving VRMA:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed waving animation load:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed waving animation load:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/blowkiss.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/blowkiss.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -1136,14 +1151,11 @@ export const Avatar: React.FC<AvatarProps> = ({
             } catch (pErr) {
               console.warn("Error parsing blowkiss VRMA:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed blowkiss animation load:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed blowkiss animation load:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/cheer.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/cheer.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -1158,14 +1170,11 @@ export const Avatar: React.FC<AvatarProps> = ({
             } catch (pErr) {
               console.warn("Error parsing cheer VRMA:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed cheer animation load:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed cheer animation load:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/dance.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/dance.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -1180,14 +1189,11 @@ export const Avatar: React.FC<AvatarProps> = ({
             } catch (pErr) {
               console.warn("Error parsing dance VRMA:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed dance animation load:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed dance animation load:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/victorypose.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/victorypose.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -1207,13 +1213,11 @@ export const Avatar: React.FC<AvatarProps> = ({
                 victoryActionRef.current = cheerActionRef.current;
               }
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("Gracefully falling back from victorypose loading error:", err?.message || err);
-            vrmaLoader.load(
-              "/animations/cheer.vrma",
-              (fallbackGltf) => {
+            loadVrmaWithCache("/animations/cheer.vrma")
+              .then((fallbackGltf) => {
                 if (!isMounted || !mixerRef.current) return;
                 try {
                   const vrmAnimations = fallbackGltf.userData?.vrmAnimations;
@@ -1228,19 +1232,14 @@ export const Avatar: React.FC<AvatarProps> = ({
                 } catch {
                   // silent
                 }
-              }
-            );
-          }
-        );
+              });
+          });
 
         let loadedVRMAWalk = false;
-        const walkVrmaLoader = new GLTFLoader();
-        walkVrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
         // Load walkingstart.vrma always as walkActionRef (original walk used as default)
-        walkVrmaLoader.load(
-          "/animations/walkingstart.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/walkingstart.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1260,17 +1259,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               loadedVRMAWalk = true;
               console.log("[Avatar] Successfully loaded VRMA walking start animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("Gracefully bypassed VRMA walking start loading:", err?.message || err);
-          }
-        );
+          });
 
         // Load catwalk.vrma always as catwalkActionRef (catwalk used for strut gesture)
-        walkVrmaLoader.load(
-          "/animations/catwalk.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/catwalk.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1289,17 +1285,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               catwalkActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA catwalk animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] catwalk.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
         // Load jogging.vrma
-        walkVrmaLoader.load(
-          "/animations/jogging.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/jogging.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1318,17 +1311,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               joggingActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA jogging animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] jogging.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
         // Load run.vrma
-        walkVrmaLoader.load(
-          "/animations/run.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/run.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1347,17 +1337,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               runActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA run animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] run.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
         // Load walkturnleft.vrma
-        walkVrmaLoader.load(
-          "/animations/walkturnleft.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/walkturnleft.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1376,17 +1363,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               turnLeftActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA walkturnleft animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] walkturnleft.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
         // Load walkturnright.vrma
-        walkVrmaLoader.load(
-          "/animations/walkturnright.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/walkturnright.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1405,17 +1389,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               turnRightActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA walkturnright animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] walkturnright.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
         // Load turnaroundwalk.vrma
-        walkVrmaLoader.load(
-          "/animations/turnaroundwalk.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/turnaroundwalk.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1434,17 +1415,14 @@ export const Avatar: React.FC<AvatarProps> = ({
               turnaroundActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA turnaroundwalk animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] turnaroundwalk.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
         // Load walktorun.vrma
-        walkVrmaLoader.load(
-          "/animations/walktorun.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/walktorun.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1463,22 +1441,17 @@ export const Avatar: React.FC<AvatarProps> = ({
               walkToRunActionRef.current.play();
               console.log("[Avatar] Successfully loaded VRMA walktorun animation!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[Avatar] walktorun.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
 
 
 
 
 
-        const aslVrmaLoader = new GLTFLoader();
-        aslVrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
-        aslVrmaLoader.load(
-          "/animations/SG ASL Antigravity 1 2023-7-10 No Mesh Mixamo.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/SG ASL Antigravity 1 2023-7-10 No Mesh Mixamo.vrma")
+          .then((vrmaGltf) => {
             if (!isMounted || !mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -1489,10 +1462,8 @@ export const Avatar: React.FC<AvatarProps> = ({
               signActionRef.current.clampWhenFinished = false;
               console.log("[Avatar] Successfully loaded VRMA sign language animation!");
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed VRMA sign language loading:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed VRMA sign language loading:", err?.message || err));
         
         if (isLocal) {
           setTimeout(() => {
@@ -1968,7 +1939,7 @@ export const Avatar: React.FC<AvatarProps> = ({
         jumpCooldownRef.current -= delta;
       }
 
-      const isJumpingState = Math.abs(linvel.y) > 0.1 || currentPos.y > 0.5;
+      const isJumpingState = Math.abs(linvel.y) > 0.5;
 
       // Jumping
       let justJumped = false;
@@ -1988,7 +1959,7 @@ export const Avatar: React.FC<AvatarProps> = ({
       }
       
       const updatedLinvel = rigidBodyRef.current.linvel();
-      const isActuallyJumping = justJumped || Math.abs(updatedLinvel.y) > 0.1 || currentPos.y > 0.5 || jumpCooldownRef.current > 0.2;
+      const isActuallyJumping = justJumped || Math.abs(updatedLinvel.y) > 0.5 || jumpCooldownRef.current > 0.2;
       
       // Debug log every second or so
       const _t = Math.floor(state.clock.elapsedTime * 10);
@@ -3030,8 +3001,17 @@ export const Avatar: React.FC<AvatarProps> = ({
 
       const slerpFactor = 10 * delta; // Adjust for smoothness
 
-      // Only do complex bone math if within 30 meters
-      if (dist < 30) {
+      const globalState = useStore.getState();
+      const threshold = globalState.performanceMode ? 6 : 14;
+      const isDistantCurrent = dist > threshold;
+
+      // Control VRM scene visibility dynamically for draw call instancing
+      if (vrm && vrm.scene) {
+        vrm.scene.visible = !isDistantCurrent;
+      }
+
+      // Only do complex bone math if within the high-fidelity visibility threshold
+      if (dist <= threshold) {
         for (const boneName in targetBones.current) {
           const targetQuat = targetBones.current[boneName];
           if (targetQuat) {
@@ -3140,9 +3120,10 @@ export const Avatar: React.FC<AvatarProps> = ({
       globalState.localUserPosition[2],
     );
     const distToLocal = isLocal ? 0 : posVec.distanceTo(localUserVec);
+    const threshold = globalState.performanceMode ? 6 : 14;
 
     // Only process heavy visuals if we are close enough to the local camera
-    if (distToLocal < 30) {
+    if (distToLocal <= threshold) {
       if (vrm.expressionManager) {
         // Blinking
         if (
@@ -3307,9 +3288,8 @@ export const Avatar: React.FC<AvatarProps> = ({
             <Html
               position={[0, 2.5, 0]} // Fixed height above player origin
               center
-              transform
-              sprite
-              zIndexRange={[100, 0]}
+              distanceFactor={15}
+              zIndexRange={[9, 0]}
               style={{ pointerEvents: "none" }}
             >
               <div className="flex flex-col items-center justify-center select-none">

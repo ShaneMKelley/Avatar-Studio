@@ -29,7 +29,7 @@ export const Scoreboard = () => {
   if (allUsers.length === 0) return null;
 
   return (
-    <div className="absolute top-[96px] md:top-[128px] right-2 md:right-4 z-10 bg-zinc-950/80 backdrop-blur-md rounded-2xl border border-white/10 p-3 md:p-4 min-w-[160px] md:min-w-[220px] shadow-2xl">
+    <div className="absolute top-[96px] md:top-[128px] right-2 md:right-4 z-50 bg-zinc-950/80 backdrop-blur-md rounded-2xl border border-white/10 p-3 md:p-4 min-w-[160px] md:min-w-[220px] shadow-2xl">
       <h3 className="text-white text-sm font-semibold mb-4 flex items-center gap-2 border-b border-white/10 pb-2">
         <Trophy className="w-4 h-4 text-yellow-500" />
         Live Leaderboard

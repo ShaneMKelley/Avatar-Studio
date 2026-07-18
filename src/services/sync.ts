@@ -110,6 +110,13 @@ class SyncService {
   private localUserId: string;
   private lastSyncTime = 0;
   private syncInterval = 1000 / 15; // 15Hz
+  private lastBroadcastedData: {
+    position: number[];
+    rotation: number[];
+    vowel_a: number;
+    vowel_i?: number;
+    vowel_o?: number;
+  } | null = null;
 
   public onBoneDataReceived: ((data: BoneSyncData) => void) | null = null;
   public onNpcBoneDataReceived: ((npcId: string, data: Omit<BoneSyncData, 'userId'>) => void) | null = null;
@@ -599,8 +606,53 @@ class SyncService {
 
   public broadcastBoneData(data: Omit<BoneSyncData, 'userId'>) {
     const now = performance.now();
-    if (now - this.lastSyncTime < this.syncInterval) return;
+    
+    // Calculate if anything significant has changed to dynamically scale network throttling
+    let hasChanged = false;
+    
+    if (!this.lastBroadcastedData) {
+      hasChanged = true;
+    } else {
+      const posDistSq = 
+        Math.pow(data.position[0] - this.lastBroadcastedData.position[0], 2) +
+        Math.pow(data.position[1] - this.lastBroadcastedData.position[1], 2) +
+        Math.pow(data.position[2] - this.lastBroadcastedData.position[2], 2);
+      
+      const rotDistSq =
+        Math.pow(data.rotation[0] - this.lastBroadcastedData.rotation[0], 2) +
+        Math.pow(data.rotation[1] - this.lastBroadcastedData.rotation[1], 2) +
+        Math.pow(data.rotation[2] - this.lastBroadcastedData.rotation[2], 2);
+      
+      const voiceDiff = 
+        Math.abs(data.vowel_a - this.lastBroadcastedData.vowel_a) +
+        Math.abs((data.vowel_i || 0) - (this.lastBroadcastedData.vowel_i || 0)) +
+        Math.abs((data.vowel_o || 0) - (this.lastBroadcastedData.vowel_o || 0));
+
+      if (posDistSq > 0.0001 || rotDistSq > 0.0001 || voiceDiff > 0.02) {
+        hasChanged = true;
+      } else {
+        const currentGesture = useStore.getState().localUserGesture;
+        if (currentGesture && currentGesture !== 'idle') {
+          hasChanged = true;
+        }
+      }
+    }
+
+    // Dynamic sync rate: 15Hz (66ms) when active, 1Hz (1000ms) heartbeat when standing completely still
+    const currentInterval = hasChanged ? this.syncInterval : 1000;
+
+    if (now - this.lastSyncTime < currentInterval) return;
     this.lastSyncTime = now;
+
+    if (hasChanged || !this.lastBroadcastedData) {
+      this.lastBroadcastedData = {
+        position: [...data.position],
+        rotation: [...data.rotation],
+        vowel_a: data.vowel_a,
+        vowel_i: data.vowel_i,
+        vowel_o: data.vowel_o
+      };
+    }
 
     const buffer = packBoneData(data);
 

@@ -10,7 +10,7 @@ export const GesturesBar = () => {
   };
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 bg-zinc-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-1.5 md:p-2 flex gap-1 md:gap-2 shadow-xl max-w-[calc(100vw-2rem)] overflow-x-auto hide-scrollbar">
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 bg-zinc-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-1.5 md:p-2 flex gap-1 md:gap-2 shadow-xl max-w-[calc(100vw-2rem)] overflow-x-auto hide-scrollbar">
       <button
         onClick={() => handleGesture('wave')}
         className={`flex items-center gap-1.5 md:gap-2 px-3 md:px-4 py-2 rounded-xl font-medium text-xs md:text-sm transition-colors whitespace-nowrap ${

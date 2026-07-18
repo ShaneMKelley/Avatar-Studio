@@ -63,10 +63,18 @@ function SentinalModel({ disabled, speed, hitTrigger, shootTime, chargeState }: 
     if (clone) {
       const mats: THREE.MeshStandardMaterial[] = [];
       clone.traverse((obj) => {
-        obj.frustumCulled = false;
         if (obj instanceof THREE.Mesh) {
           obj.castShadow = true;
           obj.receiveShadow = true;
+          obj.frustumCulled = true;
+          if (obj.geometry) {
+            if (!obj.geometry.boundingSphere) {
+              obj.geometry.computeBoundingSphere();
+            }
+            if (obj.geometry.boundingSphere) {
+              obj.geometry.boundingSphere.radius = Math.max(obj.geometry.boundingSphere.radius, 2.0);
+            }
+          }
           
           if (obj.material) {
             if (Array.isArray(obj.material)) {

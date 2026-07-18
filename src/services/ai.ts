@@ -38,13 +38,13 @@ export const generateEnvironment = async (prompt: string): Promise<string> => {
   return data.imageUrl;
 };
 
-export const generateGemmaResponse = async (chatHistory: string, newMessage: string, envContext: string = ""): Promise<GemmaResponse> => {
+export const generateGemmaResponse = async (chatHistory: string, newMessage: string, envContext: string = "", personality: string = "warm"): Promise<GemmaResponse> => {
   const response = await fetch('/api/generate-gemma-response', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ chatHistory, newMessage, envContext }),
+    body: JSON.stringify({ chatHistory, newMessage, envContext, personality }),
   });
   return await safeParseResponse(response, 'Failed to generate response');
 };

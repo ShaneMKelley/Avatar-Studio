@@ -15,6 +15,7 @@ import { useStore } from "../store/useStore";
 import { soundManager } from "../utils/soundManager";
 import { convertVRMMaterialsForWebGPU, isWebGPURendererActive } from "../utils/renderer";
 import { VRMAnimationLoaderPlugin, VRMAnimation, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
+import { loadVrmaWithCache } from "../utils/vrmaCache";
 
 interface GemmaGuideCloneProps {
   id: string;
@@ -146,13 +147,10 @@ export const GemmaGuideClone: React.FC<GemmaGuideCloneProps> = ({
 
         // Mixer and animations loading (converted to 100% standard VRMA)
         mixerRef.current = new THREE.AnimationMixer(vrmData.scene);
-        const vrmaLoader = new GLTFLoader();
-        vrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
-         // Wave Animation
-        vrmaLoader.load(
-          "/animations/waving.vrma",
-          (vrmaGltf) => {
+        // Wave Animation
+        loadVrmaWithCache("/animations/waving.vrma")
+          .then((vrmaGltf) => {
             if (!active || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -166,15 +164,12 @@ export const GemmaGuideClone: React.FC<GemmaGuideCloneProps> = ({
             } catch (err) {
               console.warn("[GuideClone] wave parse error:", err);
             }
-          },
-          undefined,
-          (err: any) => console.warn("[GuideClone] wave vrma load error:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("[GuideClone] wave vrma load error:", err?.message || err));
 
         // Walking Animation
-        vrmaLoader.load(
-          "/animations/catwalk.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/catwalk.vrma")
+          .then((vrmaGltf) => {
             if (!active || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -187,15 +182,12 @@ export const GemmaGuideClone: React.FC<GemmaGuideCloneProps> = ({
             } catch (err) {
               console.warn("[GuideClone] walk parse error:", err);
             }
-          },
-          undefined,
-          (err: any) => console.warn("[GuideClone] walk vrma load error:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("[GuideClone] walk vrma load error:", err?.message || err));
 
         // Dance Animation
-        vrmaLoader.load(
-          "/animations/dance.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/dance.vrma")
+          .then((vrmaGltf) => {
             if (!active || !mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -208,10 +200,8 @@ export const GemmaGuideClone: React.FC<GemmaGuideCloneProps> = ({
             } catch (err) {
               console.warn("[GuideClone] dance parse error:", err);
             }
-          },
-          undefined,
-          (err: any) => console.warn("[GuideClone] dance vrma load error:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("[GuideClone] dance vrma load error:", err?.message || err));
       },
       undefined,
       (error) => console.error("[GuideClone] loading failed:", error)

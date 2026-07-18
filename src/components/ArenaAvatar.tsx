@@ -46,9 +46,17 @@ export function ArenaAvatar({ url, disabled = false, speedRef, lastShotTime, las
             convertVRMMaterialsForWebGPU(vrmData.scene);
 
             vrmData.scene.traverse((obj) => {
-              obj.frustumCulled = false;
               if (obj instanceof THREE.Mesh) {
                 obj.castShadow = true;
+                obj.frustumCulled = true;
+                if (obj.geometry) {
+                  if (!obj.geometry.boundingSphere) {
+                    obj.geometry.computeBoundingSphere();
+                  }
+                  if (obj.geometry.boundingSphere) {
+                    obj.geometry.boundingSphere.radius = Math.max(obj.geometry.boundingSphere.radius, 2.0);
+                  }
+                }
               }
             });
             
@@ -61,9 +69,17 @@ export function ArenaAvatar({ url, disabled = false, speedRef, lastShotTime, las
           } else {
             // Standard GLB
             gltf.scene.traverse((obj) => {
-              obj.frustumCulled = false;
               if (obj instanceof THREE.Mesh) {
                 obj.castShadow = true;
+                obj.frustumCulled = true;
+                if (obj.geometry) {
+                  if (!obj.geometry.boundingSphere) {
+                    obj.geometry.computeBoundingSphere();
+                  }
+                  if (obj.geometry.boundingSphere) {
+                    obj.geometry.boundingSphere.radius = Math.max(obj.geometry.boundingSphere.radius, 2.0);
+                  }
+                }
               }
             });
             // usually meshy models might need adjusting rotation/scale depending on orientation

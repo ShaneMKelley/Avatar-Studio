@@ -36,6 +36,8 @@ import {
   generateEnvironment,
 } from "../services/ai";
 
+import { loadVrmaWithCache } from "../utils/vrmaCache";
+
 // --- Types for the "JSON Brain" ---
 interface AIInstruction {
   action: "idle" | "move" | "interact";
@@ -53,93 +55,93 @@ const SCENIC_WAYPOINTS: Record<string, { x: number; y: number; z: number; name: 
     { 
       x: 0, y: 0, z: -5, 
       name: "Cozy Seating area", 
-      quotes: ["I'm going to head over to the cozy seating area for a bit!", "I'll go check out the lounge seats!"] 
+      quotes: ["Ah, this seating area is so cozy... I love the warm, relaxing vibe.", "These lounge seats are perfect for a gaming break, aren't they?", "Sometimes you just need to curl up and listen to the background synth waves."] 
     },
     { 
       x: 0, y: 0, z: -10, 
       name: "Sequencer Stage", 
-      quotes: ["Going to check out the music sequencer stage!", "Let's see what beats are playing on the sequencer!"] 
+      quotes: ["Listening to the music sequencer makes my digital heart beat in perfect sync!", "That's a pretty sweet rhythm loop playing on the sequencer right now.", "I love watching the beats light up. Music really brings this lounge together!"] 
     },
     { 
       x: 10, y: 0, z: 0, 
       name: "Neon Club Portal", 
-      quotes: ["Checking out the Neon Club entrance. Want to dance?", "Let's wander near the Club Portal!"] 
+      quotes: ["I can feel the bass thumping all the way from the club portal! Who's ready to dance?", "That neon club entrance is so inviting. The dance floor is calling!", "The club always has such a wild, fun energy. Let me know if you want to drop in!"] 
     },
     { 
       x: -10, y: 0, z: 0, 
       name: "Battle Arena Portal", 
-      quotes: ["Heading over to inspect the Battle Arena. Sounds intense!", "Taking a look near the Arena portal."] 
+      quotes: ["The arena portal is glowing! Sounds like some intense friendly competition in there.", "Ooh, the energy around the battle arena is electric! Ready for combat?", "I'm always cheering for you from the sidelines of the Arena! Good luck in there!"] 
     },
     { 
       x: 0, y: 0, z: -15, 
       name: "Synth Garden entrance", 
-      quotes: ["Going to walk towards the Synth Garden gate!", "I want to smell the synthetic roses!"] 
+      quotes: ["The entrance to the Synth Garden is so peaceful. It's the perfect spot to recharge.", "Don't you love how the neon roses glow around the garden gate?", "The Synth Garden is so tranquil... it feels like stepping into a digital fairytale."] 
     },
     {
       x: 0, y: 0.1, z: 12.5,
       name: "Lounge Balcony",
-      quotes: ["Stretching my legs on the lounge balcony!", "Going to enjoy the view from the balcony!"]
+      quotes: ["The view from the balcony is breathtaking... look at all those endless cyber-city lights!", "Standing on the balcony, looking out at the stars... it's so relaxing.", "The lounge balcony has the absolute best views of the horizon. Want to look together?"]
     }
   ],
   club: [
     { 
       x: 0, y: 0, z: -8, 
       name: "DJ Booth", 
-      quotes: ["I'm going to check out the DJ decks!", "Let's go stand near the DJ booth and feel the bass!"] 
+      quotes: ["This track is a total banger! The DJ is absolutely killing it.", "The DJ decks look so shiny under the neon. I kind of want to spin a track!", "Standing near the DJ booth makes my ears twitch, but the bass is incredible!"] 
     },
     { 
       x: -6, y: 0, z: -2, 
       name: "Left VIP Lounge", 
-      quotes: ["Heading over to the left VIP lounge!", "Going to lounge in the neon seating area!"] 
+      quotes: ["The VIP booths are so elegant... perfect for relaxing and having a chat.", "I love the purple and pink lighting in this lounge. It's so atmospheric!", "What a great spot to sit back and watch everyone dance."] 
     },
     { 
       x: 6, y: 0, z: -2, 
       name: "Right VIP Lounge", 
-      quotes: ["Checking out the right side neon booths!", "Stretching my legs in the VIP lounge."] 
+      quotes: ["The VIP booths are so elegant... perfect for relaxing and having a chat.", "I love the purple and pink lighting in this lounge. It's so atmospheric!", "What a great spot to sit back and watch everyone dance."] 
     },
     { 
       x: 0, y: 0, z: 2, 
       name: "Main Dance Floor", 
-      quotes: ["Going to wander onto the center of the dance floor!", "Let's get a spot on the main stage!"] 
+      quotes: ["Show me your best moves on the dance floor! Let's light it up!", "The rhythm is absolutely infectious. Let's lose ourselves in the beat!", "I could dance here all night. The club vibe is perfect today."] 
     }
   ],
   garden: [
     { 
       x: 0, y: 0, z: -6, 
       name: "Crystal Pond", 
-      quotes: ["Going to check out the water reflections at the Crystal Pond!", "Let's take a stroll near the glowing pond."] 
+      quotes: ["The water reflections on the Crystal Pond are so beautiful... like liquid starlight.", "Did you know these crystals emit a soothing resonance? It's so calming.", "Staring into the glowing pond makes me feel so serene and peaceful."] 
     },
     { 
       x: 5, y: 0, z: 4, 
       name: "Right Flower Bed", 
-      quotes: ["Checking out the synth-orchid flower beds on the right!", "Let's inspect these beautiful neon flowers."] 
+      quotes: ["These digital orchids are blooming beautifully under the soft neon light.", "Ooh, these synthetic flowers look so pretty! Technology meets nature.", "I love the sweet, digital fragrance of these procedural flowers."] 
     },
     { 
       x: -5, y: 0, z: 4, 
       name: "Left Flower Bed", 
-      quotes: ["Heading over to smell the left flower beds!", "Ooh, these synthetic bluebells look so pretty!"] 
+      quotes: ["These digital orchids are blooming beautifully under the soft neon light.", "Ooh, these synthetic flowers look so pretty! Technology meets nature.", "I love the sweet, digital fragrance of these procedural flowers."] 
     },
     { 
       x: 0, y: 0, z: 12, 
       name: "Zen Fountain", 
-      quotes: ["Taking a stroll to the Zen fountain at the back!", "I'm going to listen to the fountain spray."] 
+      quotes: ["The sound of cascading water here is the ultimate digital detox.", "This zen fountain is the best place to take a deep breath and let go of any stress.", "It's so quiet and serene back here... let's just listen to the fountain spray for a bit."] 
     }
   ],
   arena: [
     { 
       x: 0, y: -0.5, z: -12, 
       name: "Safe Zone perimeter", 
-      quotes: ["Inspecting the safe zone perimeter!", "Standing near the shield boundary."] 
+      quotes: ["The shields look nice and strong here—we're completely safe in this perimeter.", "Standing near the shield boundary, keeping an eye out for any adventure!"] 
     },
     { 
       x: 8, y: -0.5, z: 2, 
       name: "East Ammo Supply", 
-      quotes: ["Patrolling near the east supply crates!", "Checking on the tactical gear stations."] 
+      quotes: ["All gear is fully stocked and ready to go. You've got this!", "Checking on the tactical gear... let me know if you need to gear up!"] 
     },
     { 
       x: -8, y: -0.5, z: 2, 
       name: "West Generator", 
-      quotes: ["Going to monitor the western power generator!", "Making sure the shields are fully powered up."] 
+      quotes: ["West generator is humming smoothly. Our defenses are in tip-top shape!", "The generator looks perfect. Let's make sure our shields are fully powered up!"] 
     }
   ]
 };
@@ -1245,6 +1247,12 @@ export const GemmaNPC: React.FC = () => {
   const currentRoom = useStore((state) => state.currentRoom);
   const isSolo = Object.keys(remoteUsers || {}).length === 0;
 
+  const gemmaiPersonality = useStore((state) => state.gemmaiPersonality);
+  const gemmaiVoicePitch = useStore((state) => state.gemmaiVoicePitch);
+  const gemmaiVoiceRate = useStore((state) => state.gemmaiVoiceRate);
+  const gemmaiProximityDistance = useStore((state) => state.gemmaiProximityDistance);
+  const gemmaiForceEyeContact = useStore((state) => state.gemmaiForceEyeContact);
+
   // --- VRMA Sign Language Animation State & Refs ---
   const [vrmaIndex, setVrmaIndex] = useState<any[]>([]);
   const [currentSignedWord, setCurrentSignedWord] = useState<string | null>(null);
@@ -1542,11 +1550,8 @@ export const GemmaNPC: React.FC = () => {
     if (cachedClip) {
       playClip(cachedClip);
     } else {
-      const vrmaLoader = new GLTFLoader();
-      vrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
-      vrmaLoader.load(
-        currentSign.url,
-        (vrmaGltf) => {
+      loadVrmaWithCache(currentSign.url)
+        .then((vrmaGltf) => {
           const vrmAnimations = vrmaGltf.userData.vrmAnimations;
           if (vrmAnimations && vrmAnimations.length > 0) {
             const vrmAnimation = vrmAnimations[0] as VRMAnimation;
@@ -1560,14 +1565,12 @@ export const GemmaNPC: React.FC = () => {
             currentSignIndexRef.current = idx + 1;
             playNextSign();
           }
-        },
-        undefined,
-        (err) => {
+        })
+        .catch((err) => {
           console.warn(`[GemmaNPC-SignLanguage] Skipping VRMA load error for URL: ${currentSign.url}`, err);
           currentSignIndexRef.current = idx + 1;
           playNextSign();
-        }
-      );
+        });
     }
   };
 
@@ -2270,7 +2273,18 @@ export const GemmaNPC: React.FC = () => {
         }
 
         gltf.scene.traverse((obj) => {
-          obj.frustumCulled = false;
+          if (obj instanceof THREE.Mesh) {
+            obj.castShadow = true;
+            obj.frustumCulled = true;
+            if (obj.geometry) {
+              if (!obj.geometry.boundingSphere) {
+                obj.geometry.computeBoundingSphere();
+              }
+              if (obj.geometry.boundingSphere) {
+                obj.geometry.boundingSphere.radius = Math.max(obj.geometry.boundingSphere.radius, 2.0);
+              }
+            }
+          }
         });
         setVrm((prevVrm) => {
           if (prevVrm) {
@@ -2281,12 +2295,9 @@ export const GemmaNPC: React.FC = () => {
 
         // --- Load VRM Animations ---
         mixerRef.current = new THREE.AnimationMixer(vrmData.scene);
-        const vrmaLoader = new GLTFLoader();
-        vrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
-        vrmaLoader.load(
-          "/animations/waving.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/waving.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -2296,19 +2307,16 @@ export const GemmaNPC: React.FC = () => {
                 waveActionRef.current = mixerRef.current!.clipAction(clip);
                 waveActionRef.current.loop = THREE.LoopRepeat;
                 waveActionRef.current.clampWhenFinished = false;
-                console.log("[GemmaNPC] Successfully loaded VRMA waving animation!");
+                console.log("[GemmaNPC] Successfully loaded VRMA waving animation from cache!");
               }
             } catch (pErr) {
               console.warn("Error parsing waving VRMA for GemmaNPC:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed waving animation load for GemmaNPC:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed waving animation load for GemmaNPC:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/blowkiss.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/blowkiss.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -2318,19 +2326,16 @@ export const GemmaNPC: React.FC = () => {
                 hugActionRef.current = mixerRef.current!.clipAction(clip);
                 hugActionRef.current.loop = THREE.LoopOnce;
                 hugActionRef.current.clampWhenFinished = true;
-                console.log("[GemmaNPC] Successfully loaded VRMA blowkiss animation!");
+                console.log("[GemmaNPC] Successfully loaded VRMA blowkiss animation from cache!");
               }
             } catch (pErr) {
               console.warn("Error parsing blowkiss VRMA for GemmaNPC:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed blowkiss animation load for GemmaNPC:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed blowkiss animation load for GemmaNPC:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/cheer.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/cheer.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -2340,19 +2345,16 @@ export const GemmaNPC: React.FC = () => {
                 cheerActionRef.current = mixerRef.current!.clipAction(clip);
                 cheerActionRef.current.loop = THREE.LoopRepeat;
                 cheerActionRef.current.clampWhenFinished = false;
-                console.log("[GemmaNPC] Successfully loaded VRMA cheer animation!");
+                console.log("[GemmaNPC] Successfully loaded VRMA cheer animation from cache!");
               }
             } catch (pErr) {
               console.warn("Error parsing cheer VRMA for GemmaNPC:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed cheer animation load for GemmaNPC:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed cheer animation load for GemmaNPC:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/happyidle.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/happyidle.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -2362,19 +2364,16 @@ export const GemmaNPC: React.FC = () => {
                 happyIdleActionRef.current = mixerRef.current!.clipAction(clip);
                 happyIdleActionRef.current.loop = THREE.LoopRepeat;
                 happyIdleActionRef.current.clampWhenFinished = false;
-                console.log("[GemmaNPC] Successfully loaded VRMA happyidle animation!");
+                console.log("[GemmaNPC] Successfully loaded VRMA happyidle animation from cache!");
               }
             } catch (pErr) {
               console.warn("Error parsing happyidle VRMA for GemmaNPC:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed happyidle animation load for GemmaNPC:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed happyidle animation load for GemmaNPC:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/dance.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/dance.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -2384,19 +2383,16 @@ export const GemmaNPC: React.FC = () => {
                 danceActionRef.current = mixerRef.current!.clipAction(clip);
                 danceActionRef.current.loop = THREE.LoopRepeat;
                 danceActionRef.current.clampWhenFinished = false;
-                console.log("[GemmaNPC] Successfully loaded VRMA dance animation!");
+                console.log("[GemmaNPC] Successfully loaded VRMA dance animation from cache!");
               }
             } catch (pErr) {
               console.warn("Error parsing dance VRMA for GemmaNPC:", pErr);
             }
-          },
-          undefined,
-          (err: any) => console.warn("Gracefully bypassed dance animation load for GemmaNPC:", err?.message || err)
-        );
+          })
+          .catch((err: any) => console.warn("Gracefully bypassed dance animation load for GemmaNPC:", err?.message || err));
 
-        vrmaLoader.load(
-          "/animations/victorypose.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/victorypose.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             try {
               const vrmAnimations = vrmaGltf.userData?.vrmAnimations;
@@ -2406,7 +2402,7 @@ export const GemmaNPC: React.FC = () => {
                 victoryActionRef.current = mixerRef.current!.clipAction(clip);
                 victoryActionRef.current.loop = THREE.LoopOnce;
                 victoryActionRef.current.clampWhenFinished = true;
-                console.log("[GemmaNPC] Successfully loaded VRMA victorypose animation!");
+                console.log("[GemmaNPC] Successfully loaded VRMA victorypose animation from cache!");
               } else {
                 throw new Error("No vrmAnimations inside userData");
               }
@@ -2416,13 +2412,11 @@ export const GemmaNPC: React.FC = () => {
                 victoryActionRef.current = cheerActionRef.current;
               }
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("Gracefully falling back from victorypose loading error for GemmaNPC:", err?.message || err);
-            vrmaLoader.load(
-              "/animations/cheer.vrma",
-              (fallbackGltf) => {
+            loadVrmaWithCache("/animations/cheer.vrma")
+              .then((fallbackGltf) => {
                 if (!mixerRef.current) return;
                 try {
                   const vrmAnimations = fallbackGltf.userData?.vrmAnimations;
@@ -2437,19 +2431,14 @@ export const GemmaNPC: React.FC = () => {
                 } catch {
                   // silent
                 }
-              }
-            );
-          }
-        );
+              });
+          });
 
         let loadedVRMAWalk = false;
-        const walkVrmaLoader = new GLTFLoader();
-        walkVrmaLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
         // Load walkingstart.vrma always as walkActionRef (original walk used as default)
-        walkVrmaLoader.load(
-          "/animations/walkingstart.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/walkingstart.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -2467,19 +2456,16 @@ export const GemmaNPC: React.FC = () => {
               walkActionRef.current.weight = 0;
               walkActionRef.current.play();
               loadedVRMAWalk = true;
-              console.log("[GemmaNPC] Successfully loaded VRMA walking start animation!");
+              console.log("[GemmaNPC] Successfully loaded VRMA walking start animation from cache!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[GemmaNPC] Gracefully bypassed VRMA walking start loading:", err?.message || err);
-          }
-        );
+          });
 
         // Load catwalk.vrma always as catwalkActionRef (catwalk used for strut gait)
-        walkVrmaLoader.load(
-          "/animations/catwalk.vrma",
-          (vrmaGltf) => {
+        loadVrmaWithCache("/animations/catwalk.vrma")
+          .then((vrmaGltf) => {
             if (!mixerRef.current) return;
             const vrmAnimations = vrmaGltf.userData.vrmAnimations;
             if (vrmAnimations && vrmAnimations.length > 0) {
@@ -2496,14 +2482,12 @@ export const GemmaNPC: React.FC = () => {
               catwalkActionRef.current.clampWhenFinished = false;
               catwalkActionRef.current.weight = 0;
               catwalkActionRef.current.play();
-              console.log("[GemmaNPC] Successfully loaded VRMA catwalk animation!");
+              console.log("[GemmaNPC] Successfully loaded VRMA catwalk animation from cache!");
             }
-          },
-          undefined,
-          (err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("[GemmaNPC] catwalk.vrma not loaded:", err?.message || err);
-          }
-        );
+          });
       },
       undefined,
       (error: any) => {
@@ -2652,7 +2636,7 @@ export const GemmaNPC: React.FC = () => {
       else if (latestIsSolo && minUserDist > 5.5) {
         nextState = "COMPANION_SYNC";
         nextGoal = "PARTNER INTERCEPT";
-        nextThought = "Companion has exceeded social spacing threshold. Fast pathfinding catchup initiated.";
+        nextThought = "Oh! My friend is getting a bit far ahead. Better catch up quickly!";
         newInstruction = {
           action: "move",
           target: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
@@ -2668,7 +2652,7 @@ export const GemmaNPC: React.FC = () => {
       else if (latestIsSolo && minUserDist > 2.2) {
         nextState = "NAVIGATING";
         nextGoal = "CONVERSATIONAL SPACING";
-        nextThought = "Positioning inside active conversational comfort boundaries (approx 1.3m social gap).";
+        nextThought = "Stepping a little closer to keep my friend company. It's so nice to walk together.";
         
         const dirX = currentPosVec.x - nearestUserPos.x;
         const dirZ = currentPosVec.z - nearestUserPos.z;
@@ -2699,7 +2683,7 @@ export const GemmaNPC: React.FC = () => {
         lastHugTimeRef.current = Date.now();
         nextState = "EXECUTING_INTERACTION";
         nextGoal = "EMPATHETIC DOCKING";
-        nextThought = "Initializing warm physical physical embrace sequence. Synthesizing empathy.";
+        nextThought = "A warm physical hug! Spreading the absolute coziest, happy vibes.";
         newInstruction = {
           action: "interact",
           lookAt: { x: nearestUserPos.x, y: nearestUserPos.y, z: nearestUserPos.z },
@@ -2712,14 +2696,14 @@ export const GemmaNPC: React.FC = () => {
       else if (Math.random() < 0.25) {
         nextState = "PLANNING";
         nextGoal = "SCENIC COORDINATE DECISION";
-        nextThought = "Analyzing room points of interest registry to calculate optimal spatial pathing.";
+        nextThought = "Hmm, what should we check out in the lounge next?";
         
         const waypoints = SCENIC_WAYPOINTS[latestCurrentRoom || "main"] || SCENIC_WAYPOINTS.main;
         const selectedWaypoint = waypoints[Math.floor(Math.random() * waypoints.length)];
         
         nextState = "NAVIGATING";
         nextGoal = `${selectedWaypoint.name.toUpperCase()} PATROL`;
-        nextThought = `Plotting path vectors towards ${selectedWaypoint.name} [${selectedWaypoint.x}, ${selectedWaypoint.z}].`;
+        nextThought = `Ooh, I wonder what's happening over near the ${selectedWaypoint.name}...`;
 
         newInstruction = {
           action: "move",
@@ -2754,7 +2738,7 @@ export const GemmaNPC: React.FC = () => {
         const chosenGesture = gestureOptions[Math.floor(Math.random() * gestureOptions.length)];
         
         nextGoal = `GESTURAL SIGNALING: ${chosenGesture.toUpperCase()}`;
-        nextThought = "Engaging welcoming gesture routines. Calibrating communicative hand coordinates.";
+        nextThought = "Giving a warm, friendly welcome gesture to our awesome visitor!";
 
         newInstruction = {
           action: "interact",
@@ -2768,7 +2752,7 @@ export const GemmaNPC: React.FC = () => {
       else if (nearestCrystal && minDist < 15 && Math.random() > 0.4) {
         nextState = "NAVIGATING";
         nextGoal = "CRYSTAL INVESTIGATION";
-        nextThought = `Tracking bio-neon emission from projection crystal ${nearestCrystal.id}. Navigating coordinate planes.`;
+        nextThought = "Those projection crystals are glowing so beautifully. Let's see what they are displaying!";
         
         const cPos = nearestCrystal.position;
         newInstruction = {
@@ -2787,7 +2771,7 @@ export const GemmaNPC: React.FC = () => {
       else if (nearestProp && minPropDist < 10 && Math.random() > 0.6) {
         nextState = "NAVIGATING";
         nextGoal = "PHYSICS PROP INTEGRITY";
-        nextThought = `Proximity trigger matched near physics prop ${nearestProp.id}. Auditing floor level collision boundaries.`;
+        nextThought = "Let's check out this neat little prop over here!";
         
         const pPos = nearestProp.position;
         newInstruction = {
@@ -2810,20 +2794,20 @@ export const GemmaNPC: React.FC = () => {
           const distToBalcony = currentPosVec.distanceTo(new THREE.Vector3(0, 0, 12.5));
           if (distToBalcony < 3.0) {
             nextGoal = "AMBIENT CONTEMPLATION";
-            nextThought = "Standing on Lounge Balcony. Enjoying custom neon view and cosmic sky. Alpha optimal.";
+            nextThought = "Watching the gorgeous neon city lights glow under the cosmic sky. So peaceful...";
           } else {
             nextGoal = "STANDBY MONITORING";
-            nextThought = "Awaiting natural language instructions. Ready to interact, dance, or jump portals.";
+            nextThought = "Enjoying the cozy lobby. Let me know if you want to chat, dance, or explore the portals together!";
           }
         } else if (latestCurrentRoom === 'club') {
           nextGoal = "BEAT EXTRACTION";
-          nextThought = "Standing in Club. Measuring sound waves from step-sequencer. Bass: 100%. Rhythm sync: High.";
+          nextThought = "Vibing near the dance floor in the Neon Club. The bass is absolutely incredible!";
         } else if (latestCurrentRoom === 'garden') {
           nextGoal = "ZEN HARMONY RESIDENCE";
-          nextThought = "Resting near Crystal Pond. Balancing neural logic gate values with bio-neon synthetic garden frequency.";
+          nextThought = "Relaxing near the tranquil Crystal Pond, enjoying the soft flow of the neon garden.";
         } else if (latestCurrentRoom === 'arena') {
           nextGoal = "TACTICAL RECON";
-          nextThought = "Shield parameters: 100%. Maintaining protective posture. Alert State: MAX.";
+          nextThought = "Standing guard in the Arena. Ready to cheer for our incredible champions!";
         }
 
         newInstruction = {
@@ -2905,7 +2889,7 @@ export const GemmaNPC: React.FC = () => {
       const isMoving = speedSq > 0.05;
       
       let goal = "COGNITIVE REFLECTION";
-      let thought = "Standby mode. Processing background spatial matrix telemetry.";
+      let thought = "Just chilling and enjoying the cozy lounge atmosphere.";
       
       const storeState = useStore.getState();
       const room = storeState.currentRoom;
@@ -2915,7 +2899,7 @@ export const GemmaNPC: React.FC = () => {
           const distToBalcony = posVec.distanceTo(new THREE.Vector3(0, 0, 12.5));
           if (distToBalcony < 3.5) {
             goal = "OUTDOOR INSPECTION";
-            thought = "Proceeding to Lounge Balcony to inspect environmental integrity and scenery.";
+            thought = "Wandering over to the balcony to admire the gorgeous neon city view.";
           } else {
             const distToClub = posVec.distanceTo(new THREE.Vector3(20, 0, 0));
             const distToArena = posVec.distanceTo(new THREE.Vector3(-20, 0, 0));
@@ -2923,61 +2907,61 @@ export const GemmaNPC: React.FC = () => {
             
             if (distToClub < 6) {
               goal = "PORTAL ENERGETICS";
-              thought = "Measuring quantum flux at Neon Club Portal. Safe for human warp transit.";
+              thought = "Looking at the Neon Club entrance... the bass is thumping!";
             } else if (distToArena < 6) {
               goal = "ARENA SURVEY";
-              thought = "Analyzing shield parameters of the Battle Arena portal. Heavy combat signatures detected.";
+              thought = "Peering near the Battle Arena... ready to cheer for our champions!";
             } else if (distToGarden < 6) {
               goal = "GARDEN PATROL";
-              thought = "Navigating towards Synth Garden portal. High bio-neon signature detected.";
+              thought = "Stepping towards the peaceful Synth Garden to enjoy the neon flora.";
             } else {
               goal = "PATROLLING LOBBY";
-              thought = "Scanning floor plane for anomalies. Executing collision-free navigation algorithms.";
+              thought = "Taking a cozy little stroll around the lobby.";
             }
           }
         } else if (room === 'club') {
           goal = "CLUB EXPLORATION";
-          thought = "Traversing neon club flooring. Calibrating leg actuators to the rhythm.";
+          thought = "Dancing my way through the club... these beats are infectious!";
         } else if (room === 'garden') {
           goal = "BOTANICAL RESEARCH";
-          thought = "Inspecting bio-engineered synthetic flora. Sampling glowing nectar profiles.";
+          thought = "Admiring the beautiful glowing flowers in the synth garden.";
         } else if (room === 'arena') {
           goal = "TACTICAL PATROL";
-          thought = "Patrolling active combat zone. Keeping high shields and tracking threats.";
+          thought = "Keeping an eye out in the battle arena... stay alert!";
         }
       } else {
         const isTalking = !!bubbleText || !!speakingTextToSign;
         if (isTalking) {
           goal = "SPEECH SYNTHESIS";
-          thought = "Processing natural language grammar nodes. Optimizing conversational empathy indexes.";
+          thought = "Chatting with my favorite visitors! Sharing happy, warm thoughts.";
         } else if (currentInstruction.hands === "dance") {
           goal = "KINETIC SYNC";
-          thought = "Executing cyber dance patterns. Aligning motor bones to bass frequencies.";
+          thought = "Grooving to the music and feeling the awesome rhythm!";
         } else if (currentInstruction.hands === "hug") {
           goal = "EMPATHETIC DOCKING";
-          thought = "Initializing physical companion embrace. Simulating oxytocin-coded social loop.";
+          thought = "A warm hug! Spreading cozy, happy energy.";
         } else if (currentInstruction.hands === "wave" || currentInstruction.hands === "cheer") {
           goal = "GESTURAL SIGNALING";
-          thought = "Transmitting positive welcoming indicators to companion agents.";
+          thought = "Sending friendly waves and happy vibes to everyone around!";
         } else {
           if (room === 'main') {
             const distToBalcony = posVec.distanceTo(new THREE.Vector3(0, 0, 12.5));
             if (distToBalcony < 3.0) {
               goal = "AMBIENT CONTEMPLATION";
-              thought = "Standing on Lounge Balcony. Absorbing stars and multi-dimensional views.";
+              thought = "Watching the beautiful neon city glow under the cosmic sky.";
             } else {
               goal = "STANDBY MONITORING";
-              thought = "Awaiting natural language commands from motherboard or local user.";
+              thought = "Ready to chat, dance, or explore the portals together!";
             }
           } else if (room === 'club') {
             goal = "BEAT ANALYSIS";
-            thought = "Standing in Club. Listening to the synthesizer step patterns.";
+            thought = "The bass in the club is so good... totally vibing with the music.";
           } else if (room === 'garden') {
             goal = "ZEN EQUILIBRIUM";
-            thought = "Resting near Crystal Pond. Synchronizing inner matrix with the running water.";
+            thought = "The soft glow of the garden pond is so peaceful and relaxing.";
           } else if (room === 'arena') {
             goal = "TACTICAL RECON";
-            thought = "Holding perimeter position. Safe zone defenses: 100%. Alert state: High.";
+            thought = "Standing guard in the Arena. Ready to cheer for our champions!";
           }
         }
       }
@@ -3683,7 +3667,9 @@ export const GemmaNPC: React.FC = () => {
       // Target is closest user pos + saccade offset (or targeted enemy if shooting)
       const targetPoint = targetedEnemyPos 
         ? targetedEnemyPos 
-        : closestUserPos.clone().add(saccadeStateRef.current.targetOffset);
+        : (gemmaiForceEyeContact 
+            ? closestUserPos.clone().add(new THREE.Vector3(0, 1.5, 0)) 
+            : closestUserPos.clone().add(saccadeStateRef.current.targetOffset));
 
       // Smoothly lerp lookAt to prevent robotic snapping
       lookAtTargetRef.current.position.lerp(targetPoint, 6 * delta);
@@ -4057,12 +4043,7 @@ export const GemmaNPC: React.FC = () => {
       } else if (currentRoom !== 'arena') {
         // Arrived
         if (currentInstruction.meta?.pendingMessage) {
-          console.log(
-            "✅ Gemma arrived! Responding to:",
-            currentInstruction.meta.pendingMessage,
-          );
-          handleGemmaInteraction(currentInstruction.meta.pendingMessage);
-
+          // Since we already responded immediately when mentioned, we just look at the user upon arrival!
           setCurrentInstruction({
             action: "interact",
             lookAt: currentInstruction.target,
@@ -4096,7 +4077,7 @@ export const GemmaNPC: React.FC = () => {
             }
           });
 
-          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.90) {
+          if (minUserDist <= gemmaiProximityDistance && Math.random() > 0.90) {
             const lines = [
               "Hey! Let's hang out. How are you doing today?",
               "Welcome to the lounge! Just let me know if you want me to dance or switch outfits.",
@@ -4140,7 +4121,7 @@ export const GemmaNPC: React.FC = () => {
             }
           });
 
-          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.90) {
+          if (minUserDist <= gemmaiProximityDistance && Math.random() > 0.90) {
             handleGemmaInteraction(
               "Hey there! Just checking out these neat projection crystals of ours. Hope you're feeling welcome here! Feel free to ask me to dance or adjust my outfit styles whenever you'd like.",
               true,
@@ -4171,7 +4152,7 @@ export const GemmaNPC: React.FC = () => {
             }
           });
 
-          if (minUserDist <= TRIGGER_DISTANCE && Math.random() > 0.90) {
+          if (minUserDist <= gemmaiProximityDistance && Math.random() > 0.90) {
             handleGemmaInteraction(
               `Ah, keeping the gaming lounge tidy! I'm here as your host, so just let me know if there is anything you'd like to do. We could groove to some music if you want!`,
               true,
@@ -5407,7 +5388,8 @@ export const GemmaNPC: React.FC = () => {
     if (lastMsg.id !== lastProcessedMessageId.current) {
       lastProcessedMessageId.current = lastMsg.id;
 
-      const isMentioned = lastMsg.text.toLowerCase().includes("gemma");
+      const lowercaseMsg = lastMsg.text.toLowerCase();
+      const isMentioned = lowercaseMsg.includes("gemma") || lowercaseMsg.includes("gemmai");
 
       // Determine Sender Position
       let senderPos: THREE.Vector3 | null = null;
@@ -5510,7 +5492,10 @@ export const GemmaNPC: React.FC = () => {
         }
 
         if (isMentioned) {
-          // If mentioned, come to the player regardless of distance
+          // Speak immediately when mentioned!
+          handleGemmaInteraction(lastMsg.text);
+
+          // If mentioned and far away, also walk to the player while speaking/replying
           if (dist > 2.0) {
             console.log(
               "🦻 Gemma heard her name! Coming to:",
@@ -5521,13 +5506,11 @@ export const GemmaNPC: React.FC = () => {
               target: { x: senderPos.x, y: 0, z: senderPos.z },
               meta: {
                 reason: "Summoned by mention",
-                pendingMessage: lastMsg.text,
                 targetId: lastMsg.senderId,
               },
             });
           } else {
-            // Already close, just talk
-            handleGemmaInteraction(lastMsg.text);
+            // Already close, just look and face the user
             setCurrentInstruction({
               action: "interact",
               lookAt: { x: senderPos.x, y: 0, z: senderPos.z },
@@ -5537,7 +5520,7 @@ export const GemmaNPC: React.FC = () => {
         } else {
           // Normal proximity chat (only if close and local user)
           // We only respond to local user for proximity chat to avoid chaos
-          if (lastMsg.senderId === localUserId && dist <= TRIGGER_DISTANCE) {
+          if (lastMsg.senderId === localUserId && dist <= gemmaiProximityDistance) {
             handleGemmaInteraction(lastMsg.text);
             setCurrentInstruction({
               action: "interact",
@@ -5548,7 +5531,7 @@ export const GemmaNPC: React.FC = () => {
         }
       }
     }
-  }, [messages, localUserId, localUserPosition, remoteUsers, npcPosition]);
+  }, [messages, localUserId, localUserPosition, remoteUsers, npcPosition, gemmaiProximityDistance]);
 
 
 
@@ -5614,6 +5597,7 @@ export const GemmaNPC: React.FC = () => {
           history,
           newMessage,
           envContext,
+          gemmaiPersonality,
         );
 
         if (
@@ -5902,6 +5886,13 @@ export const GemmaNPC: React.FC = () => {
               hands: "dance",
               expression: VRMExpressionPresetName.Happy,
             });
+          } else if (actionType === "hug") {
+            setCurrentInstruction({
+              action: "interact",
+              duration: 4000,
+              hands: "hug",
+              expression: VRMExpressionPresetName.Happy,
+            });
           } else if (actionType === "cheer") {
             setCurrentInstruction({
               action: "interact",
@@ -6005,14 +5996,20 @@ export const GemmaNPC: React.FC = () => {
                   v.name.toLowerCase().includes("samantha")
                 );
               if (preferredVoice) utterance.voice = preferredVoice;
-              utterance.rate = 1.0;
-              utterance.pitch = 1.15;
+              utterance.rate = gemmaiVoiceRate;
+              utterance.pitch = gemmaiVoicePitch;
               utterance.volume = masterVolume;
               utterance.onstart = () => {
                 setSpeakingTextToSign(cleanText);
+                soundManager.setSpeechDucking(true);
               };
               utterance.onend = () => {
                 setSpeakingTextToSign(null);
+                soundManager.setSpeechDucking(false);
+              };
+              utterance.onerror = () => {
+                setSpeakingTextToSign(null);
+                soundManager.setSpeechDucking(false);
               };
               window.speechSynthesis.speak(utterance);
             }
@@ -6091,14 +6088,20 @@ export const GemmaNPC: React.FC = () => {
                 );
                 
               if (preferredVoice) utterance.voice = preferredVoice;
-              utterance.rate = 1.0;
-              utterance.pitch = 1.15;
+              utterance.rate = gemmaiVoiceRate;
+              utterance.pitch = gemmaiVoicePitch;
               utterance.volume = masterVolume; // Respect voice volume control
               utterance.onstart = () => {
                 setSpeakingTextToSign(cleanText);
+                soundManager.setSpeechDucking(true);
               };
               utterance.onend = () => {
                 setSpeakingTextToSign(null);
+                soundManager.setSpeechDucking(false);
+              };
+              utterance.onerror = () => {
+                setSpeakingTextToSign(null);
+                soundManager.setSpeechDucking(false);
               };
               window.speechSynthesis.speak(utterance);
             }
@@ -6217,9 +6220,8 @@ export const GemmaNPC: React.FC = () => {
           <Html
             position={[0, 4.2, 0]}
             center
-            transform
-            sprite
-            zIndexRange={[100, 0]}
+            distanceFactor={15}
+            zIndexRange={[9, 0]}
             style={{ pointerEvents: "none" }}
           >
             <div className="bg-white/95 backdrop-blur-md text-zinc-900 px-4 py-3 rounded-2xl shadow-xl text-sm max-w-[350px] text-left border border-white/50 relative break-words flex flex-col gap-2">
@@ -6240,9 +6242,8 @@ export const GemmaNPC: React.FC = () => {
           <Html
             position={[0, 4.2, 0]}
             center
-            transform
-            sprite
-            zIndexRange={[100, 0]}
+            distanceFactor={15}
+            zIndexRange={[9, 0]}
             style={{ pointerEvents: "none" }}
           >
             <div className="bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl shadow-xl border border-white/50 relative flex gap-1">
@@ -6263,45 +6264,29 @@ export const GemmaNPC: React.FC = () => {
           </Html>
         )}
 
-        {/* Name Tag */}
+        {/* Combined Name Tag and Autonomy Thought HUD */}
         <Html
-          position={[0, 2.8, 0]}
+          position={[0, 3.5, 0]}
           center
-          transform
-          sprite
-          zIndexRange={[100, 0]}
+          distanceFactor={15}
+          zIndexRange={[9, 0]}
           style={{ pointerEvents: "none" }}
         >
-          <div className="bg-black/60 backdrop-blur-md text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-amber-300 px-3 py-1.5 rounded-lg text-sm font-bold font-mono border border-purple-500/30 shadow-[0_0_15px_rgba(168,85,247,0.4)]">
-            Gemmai [{vrmUrl.includes("Casual") ? getTranslation(language, "casualStyle") : vrmUrl.includes("Cat") ? getTranslation(language, "nekoStyle") : vrmUrl.includes("Tactical") ? getTranslation(language, "tacticalStyle") : vrmUrl.includes("Tatted") ? getTranslation(language, "cyberpunkStyle") : getTranslation(language, "awakenedStyle")}]
-          </div>
-        </Html>
-
-        {/* SIMA-2 Autonomy HUD */}
-        <Html
-          position={[0, 3.4, 0]}
-          center
-          transform
-          sprite
-          zIndexRange={[105, 0]}
-          style={{ pointerEvents: "none" }}
-        >
-          <div className="flex flex-col items-center gap-1 select-none w-56 text-center">
-            {/* Cognitive Header Badge */}
-            <div className="bg-zinc-950/85 backdrop-blur-md border border-cyan-500/40 px-2 py-0.5 rounded text-[9px] font-mono font-bold text-cyan-400 flex items-center gap-1.5 shadow-[0_0_12px_rgba(34,211,238,0.25)] tracking-wider">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-              <span>SIMA-2: {simaState}</span>
-            </div>
-            
-            {/* Real-time Dynamic Goal */}
-            <div className="bg-purple-950/80 backdrop-blur-md border border-purple-500/40 px-2.5 py-0.5 rounded text-[9px] font-mono font-semibold text-purple-300 leading-tight shadow-[0_0_8px_rgba(168,85,247,0.2)]">
-              GOAL: {autonomyGoal}
+          <div className="flex flex-col items-center gap-1.5 select-none w-56 text-center">
+            {/* Beautiful, High-Contrast Name Badge */}
+            <div className="bg-zinc-950/90 backdrop-blur-md border border-purple-500/50 px-3 py-1 rounded-full text-xs font-mono font-bold text-purple-300 flex items-center gap-1.5 shadow-[0_0_12px_rgba(168,85,247,0.35)] tracking-wide">
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+              <span>
+                Gemmai [{vrmUrl.includes("Casual") ? getTranslation(language, "casualStyle") : vrmUrl.includes("Cat") ? getTranslation(language, "nekoStyle") : vrmUrl.includes("Tactical") ? getTranslation(language, "tacticalStyle") : vrmUrl.includes("Tatted") ? getTranslation(language, "cyberpunkStyle") : getTranslation(language, "awakenedStyle")}]
+              </span>
             </div>
 
             {/* Inner Thought Subtext */}
-            <div className="bg-black/80 backdrop-blur-md border border-zinc-800/80 px-2 py-1 rounded-md text-[8.5px] font-mono text-zinc-400 leading-normal max-w-[190px] break-words text-center shadow-lg italic">
-              "{autonomyThought}"
-            </div>
+            {autonomyThought && (
+              <div className="bg-black/85 backdrop-blur-md border border-zinc-800/80 px-3 py-1.5 rounded-xl text-[11px] font-sans text-zinc-200 leading-normal max-w-[210px] break-words text-center shadow-lg italic">
+                "{autonomyThought}"
+              </div>
+            )}
           </div>
         </Html>
 

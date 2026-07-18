@@ -140,9 +140,9 @@ async function startServer() {
 
   app.post("/api/generate-gemma-response", express.json(), async (req, res) => {
     try {
-      const { chatHistory, newMessage, envContext } = req.body;
+      const { chatHistory, newMessage, envContext, personality } = req.body;
       const { generateGemmaResponseServer } = await import("./src/services/ai.server");
-      const result = await generateGemmaResponseServer(chatHistory, newMessage, envContext);
+      const result = await generateGemmaResponseServer(chatHistory, newMessage, envContext, personality);
       res.json(result);
     } catch (e: any) {
       console.error("Server API generate-gemma-response error:", e);
@@ -160,6 +160,19 @@ async function startServer() {
     } catch (e: any) {
       console.error("Server API generate-gemma-audio error:", e);
       res.status(500).json({ error: e.message || "Failed to generate audio" });
+    }
+  });
+
+  app.post("/api/generate-music", express.json(), async (req, res) => {
+    try {
+      const { prompt } = req.body;
+      if (!prompt) return res.status(400).json({ error: "Missing prompt" });
+      const { generateLyriaMusicServer } = await import("./src/services/ai.server");
+      const result = await generateLyriaMusicServer(prompt);
+      res.json(result);
+    } catch (e: any) {
+      console.error("Server API generate-music error:", e);
+      res.status(500).json({ error: e.message || "Failed to generate Lyria music" });
     }
   });
 
@@ -473,12 +486,47 @@ async function startServer() {
   const oauthStates = new Map<string, string>();
 
   // --- OAUTH VROID FLOW ---
+  app.get("/api/vroid/auth-url", (req, res) => {
+    const clientId = process.env.VROID_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).json({ error: "VROID_CLIENT_ID not configured" });
+    }
+
+    // Determine protocol and host dynamically, fallback to APP_URL
+    const host = req.get('host') || 'localhost:3000';
+    const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const redirectUri = process.env.APP_URL && process.env.APP_URL !== "MY_APP_URL"
+      ? `${process.env.APP_URL.replace(/\/$/, '')}/auth/callback`
+      : `${protocol}://${host}/auth/callback`;
+
+    // Generate PKCE code_verifier and code_challenge
+    const state = crypto.randomBytes(16).toString('hex');
+    const codeVerifier = crypto.randomBytes(32).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+
+    oauthStates.set(state, codeVerifier);
+
+    // Clean up state after 10 minutes to prevent memory leaks
+    setTimeout(() => {
+      oauthStates.delete(state);
+    }, 10 * 60 * 1000);
+
+    const authUrl = `https://hub.vroid.com/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=default&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
+    res.json({ url: authUrl });
+  });
+
   app.get("/auth/vroid", (req, res) => {
     const clientId = process.env.VROID_CLIENT_ID;
-    const redirectUri = `${process.env.APP_URL}/auth/callback`;
     if (!clientId) {
       return res.status(500).send("VROID_CLIENT_ID not configured");
     }
+
+    // Determine protocol and host dynamically, fallback to APP_URL
+    const host = req.get('host') || 'localhost:3000';
+    const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const redirectUri = process.env.APP_URL && process.env.APP_URL !== "MY_APP_URL"
+      ? `${process.env.APP_URL.replace(/\/$/, '')}/auth/callback`
+      : `${protocol}://${host}/auth/callback`;
     
     // Generate PKCE code_verifier and code_challenge
     const state = crypto.randomBytes(16).toString('hex');
@@ -511,7 +559,13 @@ async function startServer() {
     try {
       const clientId = process.env.VROID_CLIENT_ID;
       const clientSecret = process.env.VROID_CLIENT_SECRET;
-      const redirectUri = `${process.env.APP_URL}/auth/callback`;
+
+      // Determine protocol and host dynamically, fallback to APP_URL
+      const host = req.get('host') || 'localhost:3000';
+      const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const redirectUri = process.env.APP_URL && process.env.APP_URL !== "MY_APP_URL"
+        ? `${process.env.APP_URL.replace(/\/$/, '')}/auth/callback`
+        : `${protocol}://${host}/auth/callback`;
 
       const params = new URLSearchParams();
       params.append('client_id', clientId!);

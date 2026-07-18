@@ -28,17 +28,26 @@ import { SynthGarden } from './SynthGarden';
 import { LoungeBalcony } from './LoungeBalcony';
 import { createWebGPURenderer, isWebGPURendererActive } from '../utils/renderer';
 import { WebGPUSceneSanitizer } from './WebGPUSceneSanitizer';
+import { NeonPiano } from './NeonPiano';
+import { AvatarInstancer } from './AvatarInstancer';
+import { TextureLODManager } from './TextureLODManager';
+import { PerformanceMonitor } from './PerformanceMonitor';
 
 function GameLoop() {
   const updateTime = useGameStore(state => state.updateTime);
   const updateEnemies = useGameStore(state => state.updateEnemies);
   const cleanupEffects = useGameStore(state => state.cleanupEffects);
+  const lastThrottleTime = useRef(0);
 
   useFrame((_, delta) => {
     const now = Date.now();
     updateTime(delta);
-    updateEnemies(now);
-    cleanupEffects(now);
+    
+    if (now - lastThrottleTime.current > 100) {
+      updateEnemies(now);
+      cleanupEffects(now);
+      lastThrottleTime.current = now;
+    }
   });
   return null;
 }
@@ -471,8 +480,8 @@ const Portal = ({ position, rotation, roomId, color, name }: { position: [number
           if (payload.other.rigidBodyObject?.userData?.isLocal) {
             const now = Date.now();
             const lastTransition = (window as any).lastRoomTransitionTime || 0;
-            if (now - lastTransition < 4000) {
-              console.log("[Portal] Ignored triggering due to 4s safety threshold.");
+            if (now - lastTransition < 1500) {
+              console.log("[Portal] Ignored triggering due to 1.5s safety threshold.");
               return;
             }
             (window as any).lastRoomTransitionTime = now;
@@ -483,25 +492,43 @@ const Portal = ({ position, rotation, roomId, color, name }: { position: [number
             // Set state to trigger full screen immersive stargate tunnel
             useStore.getState().setPortalWarping({ active: true, targetRoom: roomId, color: color });
 
-            // Travel inside stargate tunnel for 1.2 seconds, then execute room reload
+            // Travel inside stargate tunnel for 1500ms, then execute room reload
             setTimeout(() => {
               if (useStore.getState().currentRoom === 'arena') {
                 useGameStore.getState().leaveGame();
               }
               syncService.changeRoom(roomId);
 
-              // 300ms cushion as remote entities settle
+              // Wait 250ms for React to mount the new room's components/Avatar and begin loading,
+              // then poll until both threeLoading and avatarLoading become false.
               setTimeout(() => {
-                soundManager.playWarpExiting();
-                // Signal fading exit
-                useStore.getState().setPortalWarping({ active: false, targetRoom: roomId, color: color });
-                
-                // Allow CSS transition to complete
-                setTimeout(() => {
-                  useStore.getState().setPortalWarping(null);
-                }, 800);
-              }, 300);
-            }, 1200);
+                const startTime = Date.now();
+                const interval = setInterval(() => {
+                  const state = useStore.getState();
+                  const elapsed = Date.now() - startTime;
+                  const isArena = state.currentRoom === 'arena';
+
+                  // We stop polling when:
+                  // 1. Both threeLoading and avatarLoading are false (fully loaded)
+                  // 2. OR we are in 'arena' (which bypasses standard layout / camera)
+                  // 3. OR we hit a generous 45-second safety timeout (to handle slow network or errors)
+                  const isFullyLoaded = !state.threeLoading && !state.avatarLoading;
+
+                  if (isFullyLoaded || isArena || elapsed > 45000) {
+                    clearInterval(interval);
+
+                    // Signal warp exit transition
+                    soundManager.playWarpExiting();
+                    state.setPortalWarping({ active: false, targetRoom: roomId, color: color });
+
+                    // Allow CSS fade transition to complete
+                    setTimeout(() => {
+                      useStore.getState().setPortalWarping(null);
+                    }, 800);
+                  }
+                }, 100);
+              }, 250);
+            }, 1500);
           }
         }}
       >
@@ -556,7 +583,7 @@ const Portal = ({ position, rotation, roomId, color, name }: { position: [number
           center 
           distanceFactor={15} 
           pointerEvents="none"
-          zIndexRange={[100, 0]}
+          zIndexRange={[9, 0]}
         >
           <div 
             style={{ 
@@ -834,6 +861,8 @@ export const Lounge: React.FC = () => {
   const localSkybox = useStore(state => state.localSkybox);
   const graphicsQuality = useStore(state => state.graphicsQuality);
   const currentRoom = useStore(state => state.currentRoom);
+  const portalWarping = useStore(state => state.portalWarping);
+  const isWarping = !!(portalWarping && portalWarping.active && portalWarping.targetRoom !== currentRoom);
   const floorColorSetting = useStore(state => state.floorColor);
   const backgroundColorSetting = useStore(state => state.backgroundColor);
   const lightingEffect = useStore(state => state.lightingEffect);
@@ -992,6 +1021,8 @@ export const Lounge: React.FC = () => {
         gl={createWebGPURenderer}
       >
         <WebGPUSceneSanitizer />
+        <TextureLODManager />
+        <PerformanceMonitor />
         <color attach="background" args={[backgroundColorSetting]} />
         <fogExp2 attach="fog" args={[fogColor, fogDensity]} />
         <XR store={xrStore}>
@@ -1027,7 +1058,7 @@ export const Lounge: React.FC = () => {
             )}
 
             {/* Props, grids and floors should not render in Arena to avoid collision with Arena objects. */}
-            {currentRoom !== 'arena' && (
+            {currentRoom !== 'arena' && currentRoom !== 'garden' && (
               <>
                 <RigidBody type="fixed" position={[0, -0.01, 0]} friction={1} collisionGroups={interactionGroups(0, [0, 1, 2])}>
                   <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
@@ -1062,39 +1093,49 @@ export const Lounge: React.FC = () => {
             <PortalsDisplay />
 
             {/* Raised Lounge Balcony */}
-            {currentRoom === 'main' && <LoungeBalcony />}
+            {currentRoom === 'main' && !isWarping && <LoungeBalcony />}
 
             {/* Boss Preview in Main Room Removed */}
 
             {/* Local User */}
-            {localVrmUrl && currentRoom !== 'arena' && (
+            {localVrmUrl && currentRoom !== 'arena' && !isWarping && (
               <Avatar url={localVrmUrl} isLocal={true} userId={localUserId} />
             )}
 
             {/* In Arena: First Person shooter */}
-            {currentRoom === 'arena' && <ArenaGroup />}
+            {currentRoom === 'arena' && !isWarping && <ArenaGroup />}
 
             {/* Autonomous NPC (Available in all rooms if solo companion experience is active) */}
-            {(currentRoom === 'main' || remoteUsers.length === 0) && <GemmaNPC />}
+            {(currentRoom === 'main' || remoteUsers.length === 0) && !isWarping && <GemmaNPC />}
 
             {/* Sequencer (Neon Club) */}
-            {currentRoom === 'club' && <Sequencer3D position={[0, 0, -5]} />}
+            {currentRoom === 'club' && !isWarping && (
+              <group>
+                <Sequencer3D position={[-4.5, 0, -8]} />
+                <NeonPiano position={[7.5, 0, -8]} />
+              </group>
+            )}
 
             {/* Synth Garden */}
-            {currentRoom === 'garden' && <SynthGarden />}
+            {currentRoom === 'garden' && !isWarping && <SynthGarden />}
 
             {/* Remote Users (Social Lounge) */}
-            {currentRoom !== 'arena' && remoteUsers.map(user => (
-              <Avatar 
-                key={user.id} 
-                url={user.vrmUrl || DEFAULT_VRM_URL} 
-                isLocal={false} 
-                userId={user.id} 
-              />
-            ))}
+            {currentRoom !== 'arena' && !isWarping && (
+              <>
+                <AvatarInstancer />
+                {remoteUsers.map(user => (
+                  <Avatar 
+                    key={user.id} 
+                    url={user.vrmUrl || DEFAULT_VRM_URL} 
+                    isLocal={false} 
+                    userId={user.id} 
+                  />
+                ))}
+              </>
+            )}
 
             {/* Gemma Companion Assistant Guide Clones */}
-            {currentRoom !== 'arena' && guideClones.map(clone => (
+            {currentRoom !== 'arena' && !isWarping && guideClones.map(clone => (
               <GemmaGuideClone
                 key={clone.id}
                 id={clone.id}
@@ -1107,7 +1148,7 @@ export const Lounge: React.FC = () => {
             ))}
 
             {/* Crystals */}
-            {currentRoom !== 'arena' && <Crystals />}
+            {currentRoom !== 'arena' && !isWarping && <Crystals />}
           </Physics>
           
           {/* Post Processing Temporarily Disabled */}

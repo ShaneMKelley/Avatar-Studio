@@ -13,7 +13,7 @@
     "vroid": "VROID Hub API is ready"
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
+    "@google/genai": "^2.4.0",
     "@pixiv/three-vrm": "^3.5.3",
     "@pixiv/three-vrm-animation": "^3.5.4",
     "@pixiv/three-vrm-materials-mtoon": "^3.5.3",
@@ -26,6 +26,7 @@
     "@types/three": "^0.185.0",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.4.1",
+    "d3": "^7.9.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
@@ -46,6 +47,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@types/d3": "^7.4.3",
     "@types/express": "^4.17.21",
     "@types/multer": "^2.1.0",
     "@types/node": "^22.14.0",

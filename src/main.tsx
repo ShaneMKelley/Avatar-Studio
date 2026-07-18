@@ -9,6 +9,10 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { GoogleReCaptchaProvider } from 'react-google-recaptcha-v3';
+import * as THREE from 'three';
+
+// Enable global memory caching for all Three.js loader requests (bypasses network/parsing for identical files)
+THREE.Cache.enabled = true;
 
 // Ignore specific Three.js WebGPU warnings for materials we auto-transcode
 const originalConsoleError = console.error;
