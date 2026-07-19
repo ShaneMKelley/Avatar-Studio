@@ -26,6 +26,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { idleTaskQueue } from '../utils/idleTaskQueue';
 import { SynthGarden } from './SynthGarden';
 import { LoungeBalcony } from './LoungeBalcony';
+import { DualArena } from './DualArena';
 import { createWebGPURenderer, isWebGPURendererActive } from '../utils/renderer';
 import { WebGPUSceneSanitizer } from './WebGPUSceneSanitizer';
 import { NeonPiano } from './NeonPiano';
@@ -486,6 +487,26 @@ const Portal = ({ position, rotation, roomId, color, name }: { position: [number
             }
             (window as any).lastRoomTransitionTime = now;
 
+            // Check wager requirements if entering Battle Arena or Dual Arena
+            if (roomId === 'arena' || roomId === 'dual') {
+              const currentCrystals = useStore.getState().localUserScore;
+              if (currentCrystals < 50) {
+                // Play warning sound
+                soundManager.playSystemIntegrityWarning?.();
+                
+                // Add a localized chat alert explaining denial
+                const arenaName = roomId === 'arena' ? 'Battle Arena' : '1v1 Dual Arena';
+                useStore.getState().addMessage({
+                  id: `denial-${Date.now()}`,
+                  senderId: 'SYSTEM',
+                  senderName: 'SYSTEM',
+                  text: `🚫 ACCESS DENIED: You need at least 50 crystals to wager and enter the ${arenaName}! Your balance: ${currentCrystals} / 50 💎`,
+                  timestamp: Date.now()
+                });
+                return;
+              }
+            }
+
             // Trigger warp audio sweep
             soundManager.playWarpEntering();
 
@@ -494,7 +515,8 @@ const Portal = ({ position, rotation, roomId, color, name }: { position: [number
 
             // Travel inside stargate tunnel for 1500ms, then execute room reload
             setTimeout(() => {
-              if (useStore.getState().currentRoom === 'arena') {
+              const prevRoom = useStore.getState().currentRoom;
+              if (prevRoom === 'arena' || prevRoom === 'dual') {
                 useGameStore.getState().leaveGame();
               }
               syncService.changeRoom(roomId);
@@ -631,7 +653,7 @@ const CameraController = () => {
   }, [isFirstPerson, setIsSettingsOpen]);
 
   useFrame((state, delta) => {
-    if (currentRoom === 'arena') return; // Arena uses Player's own camera logic
+    if (currentRoom === 'arena' || currentRoom === 'dual') return; // Arena/Dual uses Player's own camera logic
 
     if (isPresenting) return;
 
@@ -673,7 +695,7 @@ const CameraController = () => {
     }
   });
 
-  if (isPresenting || currentRoom === 'arena') return null;
+  if (isPresenting || currentRoom === 'arena' || currentRoom === 'dual') return null;
 
   if (isFirstPerson && !isSettingsOpen && !isRadialMenuOpen) {
     return <PointerLockControls makeDefault pointerSpeed={useStore.getState().mouseSensitivity} />;
@@ -855,6 +877,24 @@ const ArenaGroup = () => {
   );
 };
 
+const DualArenaGroup = () => {
+  const otherPlayerIds = useGameStore(
+    useShallow(state => Object.keys(state.otherPlayers))
+  );
+
+  return (
+    <>
+      <GameLoop />
+      <DualArena />
+      <Player />
+      {otherPlayerIds.map(id => (
+        <OtherPlayer key={id} id={id} />
+      ))}
+      <Effects />
+    </>
+  );
+};
+
 export const Lounge: React.FC = () => {
   const localUserId = useStore(state => state.localUserId);
   const localVrmUrl = useStore(state => state.vrmUrl);
@@ -958,6 +998,7 @@ export const Lounge: React.FC = () => {
           <Portal position={[-20, 0, 0]} rotation={[0, Math.PI / 2, 0]} roomId="arena" color="#ff4400" name={getTranslation(language, 'battleArena')} />
           <Portal position={[0, 0, 20]} rotation={[0, Math.PI, 0]} roomId="lounge" color="#00ff88" name={getTranslation(language, 'chillLounge')} />
           <Portal position={[0, 0, -20]} rotation={[0, 0, 0]} roomId="garden" color="#10b981" name="SYNTH GARDEN" />
+          <Portal position={[-14, 0, -14]} rotation={[0, Math.PI / 4, 0]} roomId="dual" color="#38bdf8" name="1v1 DUAL ARENA" />
         </group>
       );
     }
@@ -973,6 +1014,20 @@ export const Lounge: React.FC = () => {
           <mesh position={[0, -0.48, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <ringGeometry args={[0, 0.2, 32]} />
             <meshBasicMaterial color="#00ffff" toneMapped={false} transparent opacity={0.65} />
+          </mesh>
+          {/* Flush with the arena floor at y = -0.5 */}
+          <Portal position={[0, -0.5, -5]} rotation={[0, 0, 0]} roomId="main" color="#ef4444" name={getTranslation(language, 'exitToLobby')} />
+        </group>
+      );
+    }
+
+    if (currentRoom === 'dual') {
+      return (
+        <group>
+          {/* Holographic Landing Pad indicator around spawnpoint [0, -0.48, 0] */}
+          <mesh position={[0, -0.48, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[1.2, 1.4, 32]} />
+            <meshBasicMaterial color="#38bdf8" toneMapped={false} transparent opacity={0.65} />
           </mesh>
           {/* Flush with the arena floor at y = -0.5 */}
           <Portal position={[0, -0.5, -5]} rotation={[0, 0, 0]} roomId="main" color="#ef4444" name={getTranslation(language, 'exitToLobby')} />
@@ -1058,7 +1113,7 @@ export const Lounge: React.FC = () => {
             )}
 
             {/* Props, grids and floors should not render in Arena to avoid collision with Arena objects. */}
-            {currentRoom !== 'arena' && currentRoom !== 'garden' && (
+            {currentRoom !== 'arena' && currentRoom !== 'garden' && currentRoom !== 'dual' && (
               <>
                 <RigidBody type="fixed" position={[0, -0.01, 0]} friction={1} collisionGroups={interactionGroups(0, [0, 1, 2])}>
                   <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
@@ -1098,12 +1153,15 @@ export const Lounge: React.FC = () => {
             {/* Boss Preview in Main Room Removed */}
 
             {/* Local User */}
-            {localVrmUrl && currentRoom !== 'arena' && !isWarping && (
+            {localVrmUrl && currentRoom !== 'arena' && currentRoom !== 'dual' && !isWarping && (
               <Avatar url={localVrmUrl} isLocal={true} userId={localUserId} />
             )}
 
             {/* In Arena: First Person shooter */}
             {currentRoom === 'arena' && !isWarping && <ArenaGroup />}
+
+            {/* In Dual Arena: 1v1 lightweight duel */}
+            {currentRoom === 'dual' && !isWarping && <DualArenaGroup />}
 
             {/* Autonomous NPC (Available in all rooms if solo companion experience is active) */}
             {(currentRoom === 'main' || remoteUsers.length === 0) && !isWarping && <GemmaNPC />}
@@ -1120,7 +1178,7 @@ export const Lounge: React.FC = () => {
             {currentRoom === 'garden' && !isWarping && <SynthGarden />}
 
             {/* Remote Users (Social Lounge) */}
-            {currentRoom !== 'arena' && !isWarping && (
+            {currentRoom !== 'arena' && currentRoom !== 'dual' && !isWarping && (
               <>
                 <AvatarInstancer />
                 {remoteUsers.map(user => (
@@ -1135,7 +1193,7 @@ export const Lounge: React.FC = () => {
             )}
 
             {/* Gemma Companion Assistant Guide Clones */}
-            {currentRoom !== 'arena' && !isWarping && guideClones.map(clone => (
+            {currentRoom !== 'arena' && currentRoom !== 'dual' && !isWarping && guideClones.map(clone => (
               <GemmaGuideClone
                 key={clone.id}
                 id={clone.id}
@@ -1148,7 +1206,7 @@ export const Lounge: React.FC = () => {
             ))}
 
             {/* Crystals */}
-            {currentRoom !== 'arena' && !isWarping && <Crystals />}
+            {currentRoom !== 'arena' && currentRoom !== 'dual' && !isWarping && <Crystals />}
           </Physics>
           
           {/* Post Processing Temporarily Disabled */}

@@ -1945,7 +1945,7 @@ export const Avatar: React.FC<AvatarProps> = ({
       let justJumped = false;
       if (keys.space && !isJumpingState && jumpCooldownRef.current <= 0) {
         rigidBodyRef.current.setLinvel(
-          { x: linvel.x, y: 5.5, z: linvel.z },
+          { x: linvel.x, y: 6.8, z: linvel.z },
           true,
         );
         justJumped = true;

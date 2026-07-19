@@ -139,6 +139,17 @@ interface GameStore {
   // Multiplayer
   socket: Socket | null;
   otherPlayers: Record<string, PlayerData>;
+  duelState: {
+    active: boolean;
+    player1Id: string;
+    player2Id: string;
+    p1Name: string;
+    p2Name: string;
+    timeLeft: number;
+    p1Score: number;
+    p2Score: number;
+    shieldCountdown?: number;
+  } | null;
 
   startGame: () => void;
   endGame: () => void;
@@ -254,6 +265,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   playerDisabledUntil: 0,
   playerHealth: 100,
   enemies: [],
+  duelState: null,
   lasers: [],
   particles: [],
   events: [],
@@ -364,19 +376,40 @@ export const useGameStore = create<GameStore>((set, get) => ({
       console.log("[Arena] Connected to Arena socket server successfully! Socket ID:", newSocket?.id);
       const vrmUrl = useStore.getState().vrmUrl;
       const name = useStore.getState().localUserName;
-      newSocket!.emit('joinGame', { vrmUrl, name });
+      const room = useStore.getState().currentRoom;
+      newSocket!.emit('joinGame', { vrmUrl, name, room });
     });
 
     if (newSocket.connected) {
       console.log("[Arena] Socket already connected on initialization!");
       const vrmUrl = useStore.getState().vrmUrl;
       const name = useStore.getState().localUserName;
-      newSocket.emit('joinGame', { vrmUrl, name });
+      const room = useStore.getState().currentRoom;
+      newSocket.emit('joinGame', { vrmUrl, name, room });
     }
 
     newSocket.on('gameError', (msg: string) => {
       console.error('[Arena Game Error]', msg);
+      
+      let errorMsg = `🚫 Arena Error: ${msg}`;
+      if (msg === 'INSUFFICIENT_CRYSTALS') {
+        errorMsg = `🚫 ACCESS DENIED: You need at least 50 crystals to wager and enter!`;
+      }
+      
+      useStore.getState().addMessage({
+        id: `arena-error-${Date.now()}`,
+        senderId: 'SYSTEM',
+        senderName: 'SYSTEM',
+        text: errorMsg,
+        timestamp: Date.now()
+      });
+      
       get().leaveGame();
+      
+      if (useStore.getState().currentRoom === 'arena') {
+        useStore.getState().setCurrentRoom('main');
+        syncService.changeRoom('main');
+      }
     });
 
     newSocket.on('gameJoined', (players: Record<string, PlayerData>) => {
@@ -540,6 +573,42 @@ export const useGameStore = create<GameStore>((set, get) => ({
           };
         });
       });
+
+      newSocket.on('enemyKilledBroadcast', (data: { killerName: string, victimName: string, weaponType: 'laser' | 'rocket' | 'slash' | 'malfunction' }) => {
+        set(state => {
+          const nextKillFeed = [...(state.killFeed || [])];
+          nextKillFeed.push({
+            id: Math.random().toString(),
+            killerName: data.killerName,
+            victimName: data.victimName,
+            weaponType: data.weaponType,
+            timestamp: Date.now()
+          });
+          return {
+            killFeed: nextKillFeed.slice(-10)
+          };
+        });
+      });
+
+      newSocket.on('duelUpdate', (data: any) => {
+        set({
+          duelState: data
+        });
+      });
+
+      newSocket.on('duelFinished', (data: { winner: string, loser: string }) => {
+        set({
+          duelState: null
+        });
+        const localName = useStore.getState().localUserName;
+        if (data.loser === localName) {
+          useStore.getState().setLocalUserNemesis(data.winner);
+        }
+      });
+
+      newSocket.on('gemmai_announcement', (data: { text: string }) => {
+        soundManager.speakVoiceover(data.text);
+      });
     set({
       gameState: 'playing',
       score: 0,
@@ -565,7 +634,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       isRechargingAmmo: false,
       lastShootTimeMs: 0,
       recoilBloom: 0,
-      hitStopActive: false
+      hitStopActive: false,
+      duelState: null
     });
   },
 
@@ -826,6 +896,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         weaponType: weapon,
         timestamp: Date.now()
       });
+
+      if (state.socket) {
+        state.socket.emit('enemyKilled', {
+          killerName: killer,
+          victimName: victim,
+          weaponType: weapon
+        });
+      }
 
       if (isWeakpointHit) {
         hitMessage = `💥 CRITICAL CORE BREAKPOINT on Bombardier ${id.replace('bot-', '#')}! (+300 pts)`;

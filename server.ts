@@ -793,7 +793,238 @@ async function startServer() {
 
   const MAX_PLAYERS = 60;
   let playerCounter = 1;
-  const players: Record<string, { id: string, name: string, position: [number, number, number], rotation: number, state: 'active' | 'disabled', disabledUntil: number, score: number, color: string, vrmUrl?: string }> = {};
+  const players: Record<string, { id: string, name: string, position: [number, number, number], rotation: number, state: 'active' | 'disabled', disabledUntil: number, score: number, color: string, vrmUrl?: string, room?: string }> = {};
+
+  // --- 1v1 DUEL PROTOCOL STATE ---
+  // --- 1v1 DUEL PROTOCOL STATE ---
+  let duelState = {
+    active: false,
+    player1Id: '',
+    player2Id: '',
+    p1Name: '',
+    p2Name: '',
+    timeLeft: 0,
+    startTime: 0,
+    pot: 0,
+    shieldCountdown: 0
+  };
+
+  // Run a continuous 1-second interval to check for 1v1 Duel condition
+  setInterval(() => {
+    const playerIds = Object.keys(players);
+    if (playerIds.length === 2) {
+      const p1Room = players[playerIds[0]].room || 'arena';
+      const p2Room = players[playerIds[1]].room || 'arena';
+      
+      if (p1Room === p2Room && !duelState.active) {
+        // Start a new 1v1 Duel!
+        const p1Id = playerIds[0];
+        const p2Id = playerIds[1];
+        
+        // Reset scores
+        players[p1Id].score = 0;
+        players[p2Id].score = 0;
+        
+        duelState = {
+          active: true,
+          player1Id: p1Id,
+          player2Id: p2Id,
+          p1Name: players[p1Id].name,
+          p2Name: players[p2Id].name,
+          timeLeft: 60, // 60s rounds
+          startTime: Date.now(),
+          pot: 100, // Combined 50+50 crystal pot
+          shieldCountdown: 5 // 5 seconds of countdown shields!
+        };
+        
+        // Broadcast initialization to the players & global chat log
+        io.emit('duelUpdate', { ...duelState, p1Score: 0, p2Score: 0 });
+        
+        const welcomeMessage = {
+          id: Math.random().toString(),
+          senderId: 'SYSTEM',
+          senderName: 'SYSTEM',
+          text: `⚔️ DUEL INITIATED: ${duelState.p1Name} vs ${duelState.p2Name}! 100 💎 Pot Wagered! 60s on the clock. FIGHT!`,
+          timestamp: Date.now()
+        };
+        io.emit('chat_message', welcomeMessage);
+      } else if (duelState.active) {
+        // Duel is active. Count down.
+        const p1Id = duelState.player1Id;
+        const p2Id = duelState.player2Id;
+        
+        if (players[p1Id] && players[p2Id]) {
+          const p1Score = players[p1Id].score;
+          const p2Score = players[p2Id].score;
+          
+          if (duelState.shieldCountdown > 0) {
+            duelState.shieldCountdown--;
+            io.emit('duelUpdate', { ...duelState, p1Score, p2Score });
+            
+            // Add a tick-down audio cue speak / message on 1-second ticks
+            if (duelState.shieldCountdown === 0) {
+              io.emit('chat_message', {
+                id: Math.random().toString(),
+                senderId: 'SYSTEM',
+                senderName: 'SYSTEM',
+                text: `🔥 SHIELDS RELEASED! FIGHT!`,
+                timestamp: Date.now()
+              });
+            }
+          } else {
+            duelState.timeLeft--;
+            
+            if (duelState.timeLeft <= 0) {
+              // Duel Finished!
+              duelState.active = false;
+            
+            let winnerName = '';
+            let loserName = '';
+            
+            if (p1Score > p2Score) {
+              winnerName = players[p1Id].name;
+              loserName = players[p2Id].name;
+            } else if (p2Score > p1Score) {
+              winnerName = players[p2Id].name;
+              loserName = players[p1Id].name;
+            }
+            
+            if (winnerName) {
+              // Tag the loser in users.json as the winner's nemesis
+              if (persistedUsers.has(loserName)) {
+                const savedUser = persistedUsers.get(loserName);
+                savedUser.nemesis = winnerName;
+                persistedUsers.set(loserName, savedUser);
+              }
+              
+              // Mathematically deposit the entire pot to winner's account
+              if (persistedUsers.has(winnerName)) {
+                const savedWinner = persistedUsers.get(winnerName);
+                savedWinner.score = (savedWinner.score || 0) + duelState.pot;
+                persistedUsers.set(winnerName, savedWinner);
+              }
+              saveUsers();
+              
+              // Broadcast victory in global chat log
+              const endMessage = {
+                id: Math.random().toString(),
+                senderId: 'SYSTEM',
+                senderName: 'SYSTEM',
+                text: `🏆 DUEL OVER! ${winnerName} has DEFEATED ${loserName} (${Math.max(p1Score, p2Score)} - ${Math.min(p1Score, p2Score)})! ${winnerName} plundered the entire ${duelState.pot} 💎 pot!`,
+                timestamp: Date.now()
+              };
+              io.emit('chat_message', endMessage);
+
+              // Broadcast high-stakes theft to entire room via WebSocket Kill Feed
+              io.emit('enemyKilledBroadcast', {
+                killerName: `${winnerName} (STOLE ${duelState.pot} 💎 POT)`,
+                victimName: loserName,
+                weaponType: 'slash'
+              });
+
+              // Broadcast a voice event for Gemmai to announce the winner!
+              io.emit('gemmai_announcement', {
+                text: `Wow, what a spectacular match! Congratulations to ${winnerName} for completely dominating ${loserName} and claiming the ${duelState.pot} crystal pot! ${loserName}, don't look now, but ${winnerName} is your new nemesis!`
+              });
+            } else {
+              // Draw! Refund both players their 50 crystal wager
+              const p1Name = players[p1Id].name;
+              const p2Name = players[p2Id].name;
+              
+              if (persistedUsers.has(p1Name)) {
+                const savedUser = persistedUsers.get(p1Name);
+                savedUser.score = (savedUser.score || 0) + 50;
+                persistedUsers.set(p1Name, savedUser);
+              }
+              if (persistedUsers.has(p2Name)) {
+                const savedUser = persistedUsers.get(p2Name);
+                savedUser.score = (savedUser.score || 0) + 50;
+                persistedUsers.set(p2Name, savedUser);
+              }
+              saveUsers();
+
+              const endMessage = {
+                id: Math.random().toString(),
+                senderId: 'SYSTEM',
+                senderName: 'SYSTEM',
+                text: `🤝 DUEL OVER! It's a DRAW between ${p1Name} and ${p2Name} (${p1Score} - ${p2Score})! Wagers of 50 💎 have been refunded to both players.`,
+                timestamp: Date.now()
+              };
+              io.emit('chat_message', endMessage);
+            }
+            
+            // Notify clients of duel resolution
+            io.emit('duelFinished', { winner: winnerName, loser: loserName });
+            
+            // Push updated state to players to immediately show nemesis and score changes
+            const p1Socket = io.sockets.sockets.get(p1Id);
+            const p2Socket = io.sockets.sockets.get(p2Id);
+            if (p1Socket) {
+              const savedUser1 = persistedUsers.get(players[p1Id].name) || {};
+              p1Socket.emit('restore_state', { score: savedUser1.score, vrmUrl: players[p1Id].vrmUrl, nemesis: savedUser1.nemesis || null });
+            }
+            if (p2Socket) {
+              const savedUser2 = persistedUsers.get(players[p2Id].name) || {};
+              p2Socket.emit('restore_state', { score: savedUser2.score, vrmUrl: players[p2Id].vrmUrl, nemesis: savedUser2.nemesis || null });
+            }
+          } else {
+            // Send periodic updates
+            io.emit('duelUpdate', { ...duelState, p1Score, p2Score });
+          }
+          }
+        } else {
+          // One of the players left or disconnected - Forfeit win for remaining player!
+          handleForfeit();
+        }
+      }
+    } else {
+      // If there aren't exactly 2 players, reset duel
+      if (duelState.active) {
+        handleForfeit();
+      }
+    }
+
+    function handleForfeit() {
+      duelState.active = false;
+      const remainingId = Object.keys(players)[0];
+      if (remainingId && players[remainingId]) {
+        const winnerName = players[remainingId].name;
+        const loserName = (winnerName === duelState.p1Name) ? duelState.p2Name : duelState.p1Name;
+        
+        if (persistedUsers.has(winnerName)) {
+          const savedWinner = persistedUsers.get(winnerName);
+          savedWinner.score = (savedWinner.score || 0) + duelState.pot;
+          persistedUsers.set(winnerName, savedWinner);
+          saveUsers();
+        }
+        
+        // Broadcast victory by forfeit
+        const endMessage = {
+          id: Math.random().toString(),
+          senderId: 'SYSTEM',
+          senderName: 'SYSTEM',
+          text: `🏆 DUEL OVER BY FORFEIT! ${loserName} fled or disconnected. ${winnerName} plundered the entire ${duelState.pot} 💎 pot!`,
+          timestamp: Date.now()
+        };
+        io.emit('chat_message', endMessage);
+        
+        io.emit('enemyKilledBroadcast', {
+          killerName: `${winnerName} (FORFEIT PLUNDER)`,
+          victimName: loserName,
+          weaponType: 'malfunction'
+        });
+
+        io.emit('duelFinished', { winner: winnerName, loser: loserName });
+
+        const winnerSocket = io.sockets.sockets.get(remainingId);
+        if (winnerSocket) {
+          const savedWinner = persistedUsers.get(winnerName) || {};
+          winnerSocket.emit('restore_state', { score: savedWinner.score, vrmUrl: savedWinner.vrmUrl, nemesis: savedWinner.nemesis || null });
+        }
+      }
+      io.emit('duelUpdate', { active: false });
+    }
+  }, 1000);
 
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
@@ -806,7 +1037,34 @@ async function startServer() {
       }
       const colors = ['#ff0055', '#00ff00', '#ffff00', '#ff00ff', '#00ffff'];
       const color = colors[Object.keys(players).length % colors.length];
-      const playerName = `Player ${playerCounter++}`;
+      const fallbackName = `Player ${playerCounter++}`;
+      const playerName = (data && data.name) ? data.name : fallbackName;
+      
+      // PERSISTED WAGER SYSTEM
+      let savedUser = persistedUsers.get(playerName);
+      if (!savedUser) {
+        // Bootstrap a new user record with 100 free crystals
+        savedUser = {
+          name: playerName,
+          score: 100,
+          vrmUrl: data?.vrmUrl,
+          nemesis: null
+        };
+        persistedUsers.set(playerName, savedUser);
+        saveUsers();
+      }
+
+      // Verify that the player has enough crystals to cover the wager
+      if (savedUser.score < 50) {
+        socket.emit('gameError', 'INSUFFICIENT_CRYSTALS');
+        return;
+      }
+
+      // Deduct the wager fee and save
+      savedUser.score -= 50;
+      persistedUsers.set(playerName, savedUser);
+      saveUsers();
+
       players[socket.id] = {
         id: socket.id,
         name: playerName,
@@ -816,10 +1074,19 @@ async function startServer() {
         disabledUntil: 0,
         score: 0,
         color,
-        vrmUrl: data?.vrmUrl
+        vrmUrl: data?.vrmUrl,
+        room: data?.room || 'arena'
       };
+      
       socket.emit('gameJoined', players);
       socket.broadcast.emit('playerJoined', players[socket.id]);
+
+      // Update client balance immediately
+      socket.emit('restore_state', {
+        score: savedUser.score,
+        vrmUrl: savedUser.vrmUrl,
+        nemesis: savedUser.nemesis || null
+      });
     });
 
     socket.on('updatePosition', (data: { position: [number, number, number], rotation: number }) => {
@@ -855,6 +1122,10 @@ async function startServer() {
       }
     });
 
+    socket.on('enemyKilled', (data: { killerName: string, victimName: string, weaponType: string }) => {
+      socket.broadcast.emit('enemyKilledBroadcast', data);
+    });
+
     // --- LOUNGE MULTIPLAYER ---
     socket.on("join", (userData) => {
       console.log("Client emitted join event:", userData);
@@ -873,13 +1144,15 @@ async function startServer() {
         
         socket.emit("restore_state", {
           score: savedUser.score,
-          vrmUrl: savedUser.vrmUrl
+          vrmUrl: savedUser.vrmUrl,
+          nemesis: savedUser.nemesis || null
         });
       } else if (userData.name) {
         persistedUsers.set(userData.name, {
           name: userData.name,
           score: userData.score || 0,
-          vrmUrl: userData.vrmUrl
+          vrmUrl: userData.vrmUrl,
+          nemesis: null
         });
         saveUsers();
       }

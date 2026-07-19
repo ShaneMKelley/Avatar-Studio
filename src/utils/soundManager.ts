@@ -1177,6 +1177,32 @@ class CyberSoundManager {
       console.warn("Synthesized splash playback failed:", e);
     }
   }
+
+  // Synthesize a beautiful, clean, high-pitched crystal collection chime sound
+  playCrystalCollect() {
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(880, now); // A5 chime note
+      osc.frequency.exponentialRampToValueAtTime(1760, now + 0.15); // rapid slide up to A6 for sparkle
+      
+      gain.gain.setValueAtTime(0.10, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      
+      osc.start(now);
+      osc.stop(now + 0.35);
+    } catch (e) {
+      console.warn("Crystal collect sound playback failed:", e);
+    }
+  }
 }
 
 export const soundManager = new CyberSoundManager();

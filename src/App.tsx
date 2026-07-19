@@ -23,6 +23,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CombatStats } from './components/CombatStats';
 import { EnemyTracker } from './components/EnemyTracker';
 import { KillFeed } from './components/KillFeed';
+import { DuelHUD } from './components/DuelHUD';
 
 import { Game } from './components/Game';
 import { MobileControls } from './components/MobileControls';
@@ -603,6 +604,7 @@ function ArenaHUD() {
         </div>
 
         {/* Dynamic Stylized Kill Feed */}
+        <DuelHUD />
         <KillFeed />
 
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center z-50">
@@ -1070,7 +1072,7 @@ function LoungeApp() {
   }, []);
 
   useEffect(() => {
-    if (currentRoom === 'arena' && gameState === 'menu') {
+    if ((currentRoom === 'arena' || currentRoom === 'dual') && gameState === 'menu') {
       useGameStore.getState().startGame();
     }
   }, [currentRoom, gameState]);

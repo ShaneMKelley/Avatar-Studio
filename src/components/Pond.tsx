@@ -269,13 +269,14 @@ const KoiFish: React.FC<KoiFishProps> = ({
     const wanderForce = circleCenter.add(displacement).multiplyScalar(1.5);
 
     // 3. Containment Steering Force (Stay inside pond boundary)
-    // The pond is at [0, 0], with a radius of around 5.5. Keep fish within radius 4.2.
+    // Keep fish within their custom orbit boundary plus a dynamic safety margin
+    const maxRadius = orbitRadius * 1.15;
     const distToCenter = fishState.pos.length();
     const containmentForce = new THREE.Vector3(0, 0, 0);
-    if (distToCenter > 4.2) {
+    if (distToCenter > maxRadius) {
       // Strong steering force back toward the center
       const toCenter = fishState.pos.clone().multiplyScalar(-1.0).normalize();
-      const penetration = (distToCenter - 4.2) / 1.3;
+      const penetration = (distToCenter - maxRadius) / 1.3;
       containmentForce.copy(toCenter).multiplyScalar(penetration * 6.0);
     }
 
@@ -601,17 +602,17 @@ const LowPolyPondBasin: React.FC = () => {
     <group position={[0, -2.4, 0]}>
       {/* Outer Basin Wall Cylinder */}
       <mesh castShadow receiveShadow>
-        <cylinderGeometry args={[6.1, 6.1, 4.6, 24, 1, true]} />
+        <cylinderGeometry args={[9.1, 9.1, 4.6, 24, 1, true]} />
         <meshStandardMaterial color="#022c22" roughness={0.8} side={THREE.DoubleSide} />
       </mesh>
       {/* Inner Floor Cylinder */}
       <mesh position={[0, 0.1, 0]} receiveShadow>
-        <cylinderGeometry args={[5.9, 5.9, 0.1, 24]} />
+        <cylinderGeometry args={[8.9, 8.9, 0.1, 24]} />
         <meshStandardMaterial color="#022c22" roughness={0.9} />
       </mesh>
       {/* Glowing Neon Cyber Rim Ring */}
       <mesh position={[0, 2.3, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow>
-        <ringGeometry args={[5.9, 6.2, 32]} />
+        <ringGeometry args={[8.9, 9.2, 32]} />
         <meshStandardMaterial color="#22d3ee" emissive="#06b6d4" emissiveIntensity={2.5} side={THREE.DoubleSide} />
       </mesh>
     </group>
@@ -632,7 +633,7 @@ const HighPolyPondBasin: React.FC = () => {
   }, [pondGltf.scene]);
 
   return (
-    <RigidBody type="fixed" colliders="trimesh" position={[0, -2.4, 0]} scale={[55.0, 55.0, 55.0]}>
+    <RigidBody type="fixed" colliders="trimesh" position={[0, -2.1, 0]} scale={[9.2, 9.2, 9.2]}>
       <primitive object={clone} />
     </RigidBody>
   );
@@ -710,7 +711,7 @@ export const Pond: React.FC = () => {
 
   // Center coordinate of the pond (aligns with Synth Garden spacing)
   const pondCenter = useMemo(() => new THREE.Vector3(0, 0, -12), []);
-  const pondRadius = 6.0;
+  const pondRadius = 9.0;
 
   // Track lilypad step ripple states
   const lilypadState = useRef([
@@ -975,37 +976,37 @@ export const Pond: React.FC = () => {
       <SteppingStone position={[0.0, -2.4, 0.0]} radius={1.25} height={0.6} color="#06b6d4" />
 
       {/* Southwest Winding Staircase (Escapes to South/Front Deck) */}
-      <SteppingStone position={[-1.2, -2.25, 1.2]} radius={1.05} height={0.9} color="#0891b2" />
-      <SteppingStone position={[-2.1, -2.1, 2.1]} radius={1.0} height={1.2} color="#3b82f6" />
-      <SteppingStone position={[-2.8, -1.95, 2.8]} radius={0.95} height={1.5} color="#2563eb" />
-      <SteppingStone position={[-3.3, -1.8, 3.6]} radius={0.9} height={1.8} color="#8b5cf6" />
-      <SteppingStone position={[-3.1, -1.65, 4.6]} radius={0.85} height={2.1} color="#a855f7" />
-      <SteppingStone position={[-2.2, -1.5, 5.3]} radius={0.8} height={2.4} color="#6366f1" />
+      <SteppingStone position={[-1.74, -2.25, 1.74]} radius={1.05} height={0.9} color="#0891b2" />
+      <SteppingStone position={[-3.05, -2.1, 3.05]} radius={1.0} height={1.2} color="#3b82f6" />
+      <SteppingStone position={[-4.06, -1.95, 4.06]} radius={0.95} height={1.5} color="#2563eb" />
+      <SteppingStone position={[-4.79, -1.8, 5.22]} radius={0.9} height={1.8} color="#8b5cf6" />
+      <SteppingStone position={[-4.5, -1.65, 6.67]} radius={0.85} height={2.1} color="#a855f7" />
+      <SteppingStone position={[-3.19, -1.5, 7.69]} radius={0.8} height={2.4} color="#6366f1" />
 
       {/* Northeast Winding Staircase (Escapes to North/Back Deck) */}
-      <SteppingStone position={[1.2, -2.25, -1.2]} radius={1.05} height={0.9} color="#ec4899" />
-      <SteppingStone position={[2.1, -2.1, -2.1]} radius={1.0} height={1.2} color="#db2777" />
-      <SteppingStone position={[2.8, -1.95, -2.8]} radius={0.95} height={1.5} color="#f43f5e" />
-      <SteppingStone position={[3.3, -1.8, -3.6]} radius={0.9} height={1.8} color="#e11d48" />
-      <SteppingStone position={[3.1, -1.65, -4.6]} radius={0.85} height={2.1} color="#fb7185" />
-      <SteppingStone position={[2.2, -1.5, -5.3]} radius={0.8} height={2.4} color="#ec4899" />
+      <SteppingStone position={[1.74, -2.25, -1.74]} radius={1.05} height={0.9} color="#ec4899" />
+      <SteppingStone position={[3.05, -2.1, -3.05]} radius={1.0} height={1.2} color="#db2777" />
+      <SteppingStone position={[4.06, -1.95, -4.06]} radius={0.95} height={1.5} color="#f43f5e" />
+      <SteppingStone position={[4.79, -1.8, -5.22]} radius={0.9} height={1.8} color="#e11d48" />
+      <SteppingStone position={[4.5, -1.65, -6.67]} radius={0.85} height={2.1} color="#fb7185" />
+      <SteppingStone position={[3.19, -1.5, -7.69]} radius={0.8} height={2.4} color="#ec4899" />
 
       {/* Wide Intermediate Side Landing Ledges for East/West Escapes with Gradual Climbing Steps */}
       {/* West Side Staircase */}
-      <SteppingStone position={[-1.3, -2.25, 0.0]} radius={1.0} height={0.9} color="#059669" />
-      <SteppingStone position={[-2.3, -2.1, 0.0]} radius={1.0} height={1.2} color="#0d9488" />
-      <SteppingStone position={[-3.3, -1.95, 0.0]} radius={1.0} height={1.5} color="#10b981" />
-      <SteppingStone position={[-4.3, -1.8, 0.0]} radius={1.05} height={1.8} color="#34d399" />
-      <SteppingStone position={[-5.1, -1.65, 0.0]} radius={1.1} height={2.1} color="#059669" />
-      <SteppingStone position={[-5.5, -1.5, 0.0]} radius={1.15} height={2.4} color="#10b981" />
+      <SteppingStone position={[-1.89, -2.25, 0.0]} radius={1.0} height={0.9} color="#059669" />
+      <SteppingStone position={[-3.34, -2.1, 0.0]} radius={1.0} height={1.2} color="#0d9488" />
+      <SteppingStone position={[-4.79, -1.95, 0.0]} radius={1.0} height={1.5} color="#10b981" />
+      <SteppingStone position={[-6.24, -1.8, 0.0]} radius={1.05} height={1.8} color="#34d399" />
+      <SteppingStone position={[-7.4, -1.65, 0.0]} radius={1.1} height={2.1} color="#059669" />
+      <SteppingStone position={[-8.0, -1.5, 0.0]} radius={1.15} height={2.4} color="#10b981" />
 
       {/* East Side Staircase */}
-      <SteppingStone position={[1.3, -2.25, 0.0]} radius={1.0} height={0.9} color="#d97706" />
-      <SteppingStone position={[2.3, -2.1, 0.0]} radius={1.0} height={1.2} color="#ea580c" />
-      <SteppingStone position={[3.3, -1.95, 0.0]} radius={1.0} height={1.5} color="#fbbf24" />
-      <SteppingStone position={[4.3, -1.8, 0.0]} radius={1.05} height={1.8} color="#f59e0b" />
-      <SteppingStone position={[5.1, -1.65, 0.0]} radius={1.1} height={2.1} color="#ea580c" />
-      <SteppingStone position={[5.5, -1.5, 0.0]} radius={1.15} height={2.4} color="#fbbf24" />
+      <SteppingStone position={[1.89, -2.25, 0.0]} radius={1.0} height={0.9} color="#d97706" />
+      <SteppingStone position={[3.34, -2.1, 0.0]} radius={1.0} height={1.2} color="#ea580c" />
+      <SteppingStone position={[4.79, -1.95, 0.0]} radius={1.0} height={1.5} color="#fbbf24" />
+      <SteppingStone position={[6.24, -1.8, 0.0]} radius={1.05} height={1.8} color="#f59e0b" />
+      <SteppingStone position={[7.4, -1.65, 0.0]} radius={1.1} height={2.1} color="#ea580c" />
+      <SteppingStone position={[8.0, -1.5, 0.0]} radius={1.15} height={2.4} color="#fbbf24" />
 
       {/* 1. SOLID POND STRUCTURE WITH LOD & INSTANT ACCESSIBILITY */}
       <React.Suspense fallback={<LowPolyPondBasin />}>
@@ -1045,30 +1046,30 @@ export const Pond: React.FC = () => {
         </React.Suspense>
       </RigidBody>
 
-      {/* 3. BIOLUMINESCENT UNDERWATER LOTUS FLOWERS (Floating floating on water surface at y = -0.32) */}
+      {/* 3. BIOLUMINESCENT UNDERWATER LOTUS FLOWERS (Floating floating on water surface at y = -1.82) */}
       <LotusFlower 
-        position={[-2.2, -0.32, -1.8]} 
+        position={[-2.2, -1.82, -1.8]} 
         scale={1.1} 
         offset={0.0} 
         customLilyPadUrl={customLilyPadUrl} 
         onStepChange={(p) => handleLilypadChange(0, p)}
       />
       <LotusFlower 
-        position={[2.5, -0.32, 1.5]} 
+        position={[2.5, -1.82, 1.5]} 
         scale={0.9} 
         offset={Math.PI * 0.4} 
         customLilyPadUrl={customLilyPadUrl} 
         onStepChange={(p) => handleLilypadChange(1, p)}
       />
       <LotusFlower 
-        position={[-1.5, -0.32, 2.8]} 
+        position={[-1.5, -1.82, 2.8]} 
         scale={1.0} 
         offset={Math.PI * 0.85} 
         customLilyPadUrl={customLilyPadUrl} 
         onStepChange={(p) => handleLilypadChange(2, p)}
       />
       <LotusFlower 
-        position={[1.8, -0.32, -2.5]} 
+        position={[1.8, -1.82, -2.5]} 
         scale={1.15} 
         offset={Math.PI * 1.3} 
         customLilyPadUrl={customLilyPadUrl} 
@@ -1078,9 +1079,9 @@ export const Pond: React.FC = () => {
 
       {/* 3.5. ANIMATED NEON KOI FISH (Swimming gracefully in procedurally wandering winding patterns) */}
       <KoiFish 
-        orbitRadius={2.2} 
+        orbitRadius={3.5} 
         speed={0.6} 
-        depth={-1.0} 
+        depth={-2.1} 
         color="#ff5a36" 
         emissive="#ff2200" 
         scale={0.85} 
@@ -1088,9 +1089,9 @@ export const Pond: React.FC = () => {
         customKoiUrl={customKoiUrl}
       />
       <KoiFish 
-        orbitRadius={3.4} 
+        orbitRadius={5.5} 
         speed={-0.42} 
-        depth={-1.25} 
+        depth={-2.2} 
         color="#06b6d4" 
         emissive="#0891b2" 
         scale={1.15} 
@@ -1098,9 +1099,9 @@ export const Pond: React.FC = () => {
         customKoiUrl={customKoiUrl}
       />
       <KoiFish 
-        orbitRadius={4.2} 
+        orbitRadius={7.0} 
         speed={0.48} 
-        depth={-0.85} 
+        depth={-2.0} 
         color="#a855f7" 
         emissive="#7e22ce" 
         scale={0.95} 
@@ -1108,9 +1109,9 @@ export const Pond: React.FC = () => {
         customKoiUrl={customKoiUrl}
       />
       <KoiFish 
-        orbitRadius={1.7} 
+        orbitRadius={2.5} 
         speed={-0.75} 
-        depth={-1.4} 
+        depth={-2.3} 
         color="#fbbf24" 
         emissive="#d97706" 
         scale={0.75} 
@@ -1121,28 +1122,28 @@ export const Pond: React.FC = () => {
 
       {/* 4. GLOWING MOSS CRYSTALS (Submerged sitting beautifully on the solid bottom plate at y = -2.3) */}
       <PondCrystal 
-        position={[-3.5, -2.3, -2.5]} 
+        position={[-5.1, -2.3, -3.6]} 
         scale={[0.3, 0.7, 0.3]} 
         rotation={[0.3, 0.5, 0.2]} 
         color="#10b981" 
         emissive="#059669" 
       />
       <PondCrystal 
-        position={[3.2, -2.25, -1.0]} 
+        position={[4.6, -2.25, -1.45]} 
         scale={[0.25, 0.5, 0.25]} 
         rotation={[-0.4, 0.8, -0.3]} 
         color="#a855f7" 
         emissive="#7e22ce" 
       />
       <PondCrystal 
-        position={[-0.5, -2.28, 3.8]} 
+        position={[-0.7, -2.28, 5.5]} 
         scale={[0.28, 0.6, 0.28]} 
         rotation={[0.2, -0.6, 0.4]} 
         color="#06b6d4" 
         emissive="#0891b2" 
       />
       <PondCrystal 
-        position={[2.0, -2.22, 3.0]} 
+        position={[2.9, -2.22, 4.35]} 
         scale={[0.35, 0.8, 0.35]} 
         rotation={[0.5, 0.2, -0.1]} 
         color="#ec4899" 
@@ -1150,23 +1151,23 @@ export const Pond: React.FC = () => {
       />
 
 
-      {/* 5. INTERACTIVE 3D WATER SURFACE MESH (Waving plane sized to fit snug inside metal rim boundary) */}
+      {/* 5. INTERACTIVE 3D WATER SURFACE MESH (Waving circle sized to fit snug inside metal rim boundary) */}
       <mesh 
         ref={waterRef} 
-        position={[0, -0.3, 0]} 
+        position={[0, -1.8, 0]} 
         rotation={[-Math.PI / 2, 0, 0]}
         receiveShadow
       >
-        <planeGeometry args={[11.8, 11.8, 64, 64]} />
+        <circleGeometry args={[8.5, 64]} />
         {isWebGPURendererActive() ? (
           <meshStandardMaterial
-            color="#0d9488"
-            roughness={0.05}
-            metalness={0.8}
+            color="#14b8a6"
+            roughness={0.1}
+            metalness={0.1}
             transparent={true}
-            opacity={0.85}
-            emissive="#022c22"
-            emissiveIntensity={0.8}
+            opacity={0.65}
+            emissive="#0d9488"
+            emissiveIntensity={2.5}
           />
         ) : (
           <shaderMaterial

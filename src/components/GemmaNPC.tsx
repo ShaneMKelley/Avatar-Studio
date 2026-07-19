@@ -1258,6 +1258,25 @@ export const GemmaNPC: React.FC = () => {
   const [currentSignedWord, setCurrentSignedWord] = useState<string | null>(null);
   const [speakingTextToSign, setSpeakingTextToSign] = useState<string | null>(null);
   const vrmaIndexRef = useRef<any[]>([]);
+
+  // Listen to remote announcement events
+  useEffect(() => {
+    const handleAnnouncement = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && detail.text) {
+        setBubbleText(detail.text);
+        setSpeakingTextToSign(detail.text);
+        setTimeout(() => {
+          setBubbleText(null);
+          setSpeakingTextToSign(null);
+        }, 8000);
+      }
+    };
+    window.addEventListener('gemmai-announcement', handleAnnouncement);
+    return () => {
+      window.removeEventListener('gemmai-announcement', handleAnnouncement);
+    };
+  }, []);
   const loadedVrmaClipsRef = useRef<Map<string, THREE.AnimationClip>>(new Map());
   const signSequenceRef = useRef<any[]>([]);
   const currentSignIndexRef = useRef<number>(-1);

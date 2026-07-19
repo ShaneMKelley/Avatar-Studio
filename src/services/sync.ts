@@ -2,6 +2,7 @@ import { useStore, Crystal } from '../store/useStore';
 import { v4 as uuidv4 } from 'uuid';
 import Peer from 'peerjs';
 import { io, Socket } from 'socket.io-client';
+import { soundManager } from '../utils/soundManager';
 
 export interface BoneSyncData {
   userId: string;
@@ -242,11 +243,14 @@ class SyncService {
       }
     });
 
-    this.socket.on("restore_state", (data: { score: number, vrmUrl: string }) => {
+    this.socket.on("restore_state", (data: { score: number, vrmUrl: string, nemesis?: string | null }) => {
       console.log("Restoring state from server:", data);
       useStore.getState().setLocalUserScore(data.score);
       if (data.vrmUrl) {
         useStore.getState().setLocalVrmUrl(data.vrmUrl);
+      }
+      if (data.nemesis !== undefined) {
+        useStore.getState().setLocalUserNemesis(data.nemesis);
       }
     });
 
@@ -560,6 +564,9 @@ class SyncService {
     const state = useStore.getState();
     const crystal = state.crystals[id];
     if (!crystal) return;
+    
+    // Play localized collection chime
+    soundManager.playCrystalCollect();
     
     window.dispatchEvent(new CustomEvent('crystal-collected', { detail: { position: crystal.position } }));
     useStore.getState().removeCrystal(id);

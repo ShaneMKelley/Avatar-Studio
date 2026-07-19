@@ -48,6 +48,7 @@ interface AppState {
   localUserId: string;
   localUserName: string;
   localUserScore: number;
+  localUserNemesis: string | null;
   localUserGesture: string | null;
   localUserPosition: [number, number, number];
   localUserRotation: [number, number, number];
@@ -66,6 +67,7 @@ interface AppState {
   setLocalUserId: (id: string) => void;
   setLocalUserName: (name: string) => void;
   setLocalUserScore: (score: number) => void;
+  setLocalUserNemesis: (nemesis: string | null) => void;
   setLocalUserGesture: (gesture: string | null) => void;
   setLocalUserPosition: (pos: [number, number, number]) => void;
   setLocalUserRotation: (rot: [number, number, number]) => void;
@@ -163,6 +165,7 @@ export const useStore = create<AppState>()(
       localUserId: uuidv4(),
       localUserName: `Player ${Math.floor(Math.random() * 10000)}`,
       localUserScore: 0,
+      localUserNemesis: null,
       localUserGesture: null,
       localUserPosition: [(Math.random() - 0.5) * 4, 0, (Math.random() - 0.5) * 4],
       localUserRotation: [0, 0, 0],
@@ -219,6 +222,7 @@ export const useStore = create<AppState>()(
       setLocalUserId: (id) => set({ localUserId: id }),
       setLocalUserName: (name) => set({ localUserName: name }),
       setLocalUserScore: (score) => set({ localUserScore: score }),
+      setLocalUserNemesis: (nemesis) => set({ localUserNemesis: nemesis }),
       setLocalUserGesture: (gesture) => set({ localUserGesture: gesture }),
       setLocalUserPosition: (pos) => set({ localUserPosition: pos }),
       setLocalUserRotation: (rot) => set({ localUserRotation: rot }),

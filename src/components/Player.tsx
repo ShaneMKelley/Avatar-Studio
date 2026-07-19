@@ -101,6 +101,26 @@ export function Player() {
     };
   }, []);
 
+  // Handle global teleportation event for Player (in FPS rooms like 'arena' and 'dual')
+  useEffect(() => {
+    const handleTeleport = (e: Event) => {
+      const customEvent = e as CustomEvent<{ x: number; y: number; z: number }>;
+      if (body.current && customEvent.detail) {
+        body.current.setTranslation({
+          x: customEvent.detail.x,
+          y: customEvent.detail.y + 0.5,
+          z: customEvent.detail.z
+        }, true);
+        body.current.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      }
+    };
+
+    window.addEventListener('teleport-local-player', handleTeleport);
+    return () => {
+      window.removeEventListener('teleport-local-player', handleTeleport);
+    };
+  }, []);
+
   // Trigger dash logic
   const triggerDash = (dirKey: string) => {
     if (gameState !== 'playing' || playerState !== 'active') return;
@@ -497,6 +517,13 @@ export function Player() {
 
     // Update camera position to follow rigid body with smooth crouching eye levels
     const pos = body.current.translation();
+    
+    // Boundary check to recover from out-of-bounds falling
+    if (pos.y < -20) {
+      body.current.setTranslation({ x: 0, y: 5, z: 0 }, true);
+      body.current.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    }
+
     const targetCrouchHeight = isCrouching ? 0.9 : 1.6;
     crouchHeightRef.current = THREE.MathUtils.lerp(crouchHeightRef.current, targetCrouchHeight, delta * 12);
     camera.position.set(pos.x, pos.y + crouchHeightRef.current, pos.z);
